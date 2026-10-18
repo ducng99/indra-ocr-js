@@ -1,9 +1,8 @@
 // Headless-browser verification: serves this package, loads web/demo.html in
-// Chrome, runs OCR through the same code the demo uses on wasm AND on WebGPU
-// (SwiftShader software GPU in headless Chrome), and compares each with the
-// Python package's output when the indra-ocr CLI is available (set
-// INDRA_OCR_BIN, e.g. to a venv's indra-ocr).  Also runs one page through the
-// staged hf-repo layout exactly as an app would.
+// Chrome, runs OCR through the same code the demo uses on the wasm backend,
+// and compares with the Python package's output when the indra-ocr CLI is
+// available (set INDRA_OCR_BIN, e.g. to a venv's indra-ocr).  Also runs one
+// page through the staged hf-repo layout exactly as an app would.
 //
 // Images default to ../assets/examples/* of a surrounding indra checkout when
 // present; otherwise a synthetic page is rendered in the browser as a smoke
@@ -50,10 +49,7 @@ const port = server.address().port;
 
 const browser = await puppeteer.launch({
   headless: "new",
-  args: [
-    "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
-    "--enable-unsafe-swiftshader", // WebGPU via the software adapter
-  ],
+  args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
 });
 let failed = 0;
 try {
@@ -61,12 +57,6 @@ try {
   page.on("console", (m) => m.type() === "error" && !m.text().includes("favicon") && console.error("[page error]", m.text()));
   page.on("requestfailed", (r) => console.error("[request failed]", r.url(), r.failure()?.errorText));
   await page.goto(`http://127.0.0.1:${port}/web/demo.html`, { waitUntil: "networkidle0" });
-
-  const hasWebGPU = await page.evaluate(async () => {
-    if (!navigator.gpu) return false;
-    try { return !!(await navigator.gpu.requestAdapter()); } catch { return false; }
-  });
-  console.log(`WebGPU adapter in headless Chrome: ${hasWebGPU ? "yes (SwiftShader)" : "no"}`);
 
   if (!images.length) {
     // No example images around: draw a synthetic page and smoke-test it.
@@ -96,37 +86,35 @@ try {
     const dataUrl = img.startsWith("data:")
       ? img
       : `data:${MIME[path.extname(img).toLowerCase()] ?? "image/png"};base64,${await readFile(img, "base64")}`;
-    for (const device of ["wasm", ...(hasWebGPU ? ["webgpu"] : [])]) {
-      const t0 = Date.now();
-      const result = await page.evaluate(
-        async (u, base, dev) => await window.__test(u, base, dev),
-        dataUrl, "/models", device
-      );
-      const ms = Date.now() - t0;
-      const jsLines = result.lines.map((l) => l.text);
-      let report = `${img.startsWith("data:") ? "(synthetic)" : path.basename(img)} [${result.device ?? device}]: ${jsLines.length} lines in ${ms} ms, rotation ${result.rotation}`;
-      if (img.startsWith("data:")) {
-        if (!jsLines.length) failed++;
-      } else {
-        try {
-          const py = await new Promise((resolve, reject) => {
-            const p = spawn(PY, [img, "--format", "json", "--model-dir", def("models"), "--cores", "1"]);
-            let out = "";
-            p.stdout.on("data", (d) => (out += d));
-            p.on("close", () => resolve(out));
-            p.on("error", reject);
-          });
-          const pyLines = JSON.parse(py).lines.map((l) => l.text);
-          const same = jsLines.filter((t, i) => t === pyLines[i]).length;
-          report += ` | python: ${pyLines.length} lines, identical ${same} (${((100 * same) / Math.max(pyLines.length, 1)).toFixed(1)}%)`;
-          if (jsLines.length !== pyLines.length || result.device !== device) failed++;
-        } catch {
-          report += " | (python indra-ocr not available for comparison)";
-        }
+    const t0 = Date.now();
+    const result = await page.evaluate(
+      async (u, base) => await window.__test(u, base),
+      dataUrl, "/models"
+    );
+    const ms = Date.now() - t0;
+    const jsLines = result.lines.map((l) => l.text);
+    let report = `${img.startsWith("data:") ? "(synthetic)" : path.basename(img)} [${result.device ?? "wasm"}]: ${jsLines.length} lines in ${ms} ms, rotation ${result.rotation}`;
+    if (img.startsWith("data:")) {
+      if (!jsLines.length) failed++;
+    } else {
+      try {
+        const py = await new Promise((resolve, reject) => {
+          const p = spawn(PY, [img, "--format", "json", "--model-dir", def("models"), "--cores", "1"]);
+          let out = "";
+          p.stdout.on("data", (d) => (out += d));
+          p.on("close", () => resolve(out));
+          p.on("error", reject);
+        });
+        const pyLines = JSON.parse(py).lines.map((l) => l.text);
+        const same = jsLines.filter((t, i) => t === pyLines[i]).length;
+        report += ` | python: ${pyLines.length} lines, identical ${same} (${((100 * same) / Math.max(pyLines.length, 1)).toFixed(1)}%)`;
+        if (jsLines.length !== pyLines.length || result.device !== "wasm") failed++;
+      } catch {
+        report += " | (python indra-ocr not available for comparison)";
       }
-      console.log(report);
-      if (device === "wasm") console.log("  first lines:", JSON.stringify(jsLines.slice(0, 3)));
     }
+    console.log(report);
+    console.log("  first lines:", JSON.stringify(jsLines.slice(0, 3)));
   }
 } finally {
   await browser.close();
@@ -152,7 +140,7 @@ if (existsSync(path.join(staged, "det.onnx"))) {
   const port2 = server2.address().port;
   const browser2 = await puppeteer.launch({
     headless: "new",
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--enable-unsafe-swiftshader"],
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
   });
   try {
     const page = await browser2.newPage();
@@ -160,7 +148,7 @@ if (existsSync(path.join(staged, "det.onnx"))) {
     await page.goto(`http://127.0.0.1:${port}/web/demo.html`, { waitUntil: "domcontentloaded" });
     const result = await page.evaluate(async (img, base) => {
       const { loadIndra, readGrayBrowser } = await import(base + "indra-ocr-web.mjs");
-      const ocr = await loadIndra(base, { device: "wasm" });
+      const ocr = await loadIndra(base);
       const gray = await readGrayBrowser(img);
       const page = await ocr.__call__(gray);
       return { n: page.lines.length, first: page.lines.slice(0, 2).map((l) => l.text) };

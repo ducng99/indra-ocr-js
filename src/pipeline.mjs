@@ -1,7 +1,7 @@
 // The indra-ocr pipeline, ported from indra_ocr/pipeline.py and friends.
 // Pure ESM (no Node or browser APIs): the ONNX Runtime sessions and the
 // Tensor class come from an injected backend — web/indra-ocr-web.mjs builds
-// one on onnxruntime-web (wasm or WebGPU).
+// one on onnxruntime-web (wasm).
 //
 // Not ported here (the models are optional in the Python package too):
 // orient.onnx's deskew step (estimate_skew), mask.onnx (not in this model

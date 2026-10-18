@@ -1,4 +1,4 @@
-# indra-ocr in the browser (ONNX Runtime: WebGPU / wasm)
+# indra-ocr in the browser (ONNX Runtime: wasm)
 
 Can the [datalab-to/indra-ocr](https://huggingface.co/datalab-to/indra-ocr) `.onnx`
 files be used with [transformers.js](https://huggingface.co/docs/transformers.js)?
@@ -11,7 +11,7 @@ transformers `config.json`/weights layout and no `onnx/model.onnx`, so
 **On transformers.js's ONNX Runtime backend — yes.** transformers.js is built
 on onnxruntime-web in the browser; this directory runs the raw
 `det.onnx` / `rec.onnx` / `order.onnx` / `script.onnx` + `rec_cjk.onnx` /
-`orient.onnx` sessions on that runtime directly (wasm **or WebGPU**), with the
+`orient.onnx` sessions on that runtime directly (wasm), with the
 pre- and post-processing ported 1:1 from the Python package:
 
 | Python | here |
@@ -37,8 +37,7 @@ npm run download      # det/rec/order/script/rec_cjk/orient + meta.json from the
 npm run serve         # -> http://127.0.0.1:8080/web/demo.html
 ```
 
-The demo has a device selector: **auto** (WebGPU when the browser has an
-adapter, else wasm), **webgpu**, or **wasm**. `npm run test:browser` runs the
+The demo runs everything on the wasm backend. `npm run test:browser` runs the
 demo headless in Chrome and compares against the Python CLI (when the dev
 venv's `indra-ocr` is present).
 
@@ -55,7 +54,7 @@ huggingface-cli upload YOUR-USERNAME/indra-ocr-web js/hf-repo/* . --repo-type mo
 ```html
 <script type="importmap">
 { "imports": {
-    "onnxruntime-web": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0-dev.20250409-89f8206ba4/dist/ort.webgpu.bundle.min.mjs"
+    "onnxruntime-web": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0-dev.20250409-89f8206ba4/dist/ort.wasm.bundle.min.mjs"
 } }
 </script>
 <script type="module">
@@ -68,25 +67,10 @@ huggingface-cli upload YOUR-USERNAME/indra-ocr-web js/hf-repo/* . --repo-type mo
 ```
 
 API: `loadIndra(base, opts)` with
-`opts.device: "auto" | "webgpu" | "wasm"` (default `"auto"`),
 `opts.cjk / opts.order / opts.orient` (skip optional models),
 `opts.wasmPaths` (ort wasm location override);
-the returned object reports the chosen backend in `ocr.device`.
+`ocr.device` is always `"wasm"`.
 In a bundler/npm app, skip the importmap and `npm i onnxruntime-web`.
-
-### WebGPU
-
-- `device: "auto"` probes `navigator.gpu.requestAdapter()` and only uses
-  WebGPU when an adapter answers.
-- Sessions are created with `executionProviders: ["webgpu", "wasm"]`: ops the
-  WebGPU EP does not implement (and models like `order.onnx` with its bool
-  `mask` input) fall back to the wasm EP automatically.
-- If a WebGPU session still fails to initialize **or** fails mid-run, the
-  loader rebuilds that session on wasm and re-runs — WebGPU never breaks a
-  page that wasm can do.
-- Verified here only on wasm (this machine has no GPU adapter, not even
-  SwiftShader in headless Chrome); the WebGPU path is untested — try the
-  demo's device selector on a GPU machine.
 
 ## Parity with the Python package
 

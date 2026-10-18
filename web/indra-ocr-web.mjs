@@ -1,6 +1,6 @@
 // indra-ocr in the browser, on onnxruntime-web (the same ONNX Runtime that
 // transformers.js uses in the browser; here used directly, since raw custom
-// sessions are outside transformers.js's API).  Runs on WebGPU or wasm.
+// sessions are outside transformers.js's API).  Runs on the wasm backend.
 //
 //   import { loadIndra } from "./indra-ocr-web.mjs";
 //   const ocr = await loadIndra("https://huggingface.co/USER/REPO/resolve/main");
@@ -8,14 +8,8 @@
 //
 // loadIndra(base, opts):
 //   base    model file base URL: an HF ".../resolve/main" URL, or a same-origin path
-//   opts.device        "auto" (default) | "webgpu" | "wasm"
 //   opts.cjk / opts.order / opts.orient   skip those models (no download)
 //   opts.wasmPaths     ort.env.wasm.wasmPaths override
-//
-// "auto" picks WebGPU when navigator.gpu reports an adapter, else wasm.  A
-// "webgpu" session that fails to initialize or run (e.g. an op the WebGPU EP
-// does not implement without its wasm fallback) is transparently rebuilt on
-// wasm, so WebGPU never breaks a page that wasm can do.
 import { InferenceSession, Tensor, env as ortEnv } from "onnxruntime-web";
 import { IndraOCR } from "../src/pipeline.mjs"; // staged as ./src/ by prepare-repo.mjs
 
@@ -25,60 +19,26 @@ async function fetchBuf(url) {
   return new Uint8Array(await res.arrayBuffer());
 }
 
-async function makeSession(base, name, eps) {
+async function makeSession(base, name) {
   const buf = await fetchBuf(base + name);
-  const create = (providers) =>
-    InferenceSession.create(buf, { executionProviders: providers, graphOptimizationLevel: "all" });
-  let gpu = eps.includes("webgpu");
-  let sess;
-  try {
-    sess = await create(eps);
-  } catch (e) {
-    if (!gpu) throw e;
-    console.warn(`indra-ocr: ${name}: WebGPU init failed (${e?.message ?? e}); using wasm`);
-    gpu = false;
-    sess = await create(["wasm"]);
-  }
-  return {
-    async run(inputs) {
-      try {
-        return await sess.run(inputs);
-      } catch (e) {
-        if (!gpu) throw e;
-        console.warn(`indra-ocr: ${name}: WebGPU run failed (${e?.message ?? e}); switching to wasm`);
-        gpu = false;
-        sess = await create(["wasm"]);
-        return await sess.run(inputs);
-      }
-    },
-  };
+  const sess = await InferenceSession.create(buf, {
+    executionProviders: ["wasm"],
+    graphOptimizationLevel: "all",
+  });
+  return { run: (inputs) => sess.run(inputs) };
 }
 
 export async function loadIndra(base, opts = {}) {
   if (!/\/$/.test(base)) base += "/";
   if (opts.wasmPaths) ortEnv.wasm.wasmPaths = opts.wasmPaths;
 
-  // Which device?  "auto" probes for a WebGPU adapter first.
-  let useGpu = false;
-  const want = opts.device ?? "auto";
-  if (want === "webgpu") {
-    useGpu = true;
-  } else if (want === "auto" && typeof navigator !== "undefined" && navigator.gpu) {
-    try {
-      useGpu = !!(await navigator.gpu.requestAdapter());
-    } catch {
-      /* no adapter -> wasm */
-    }
-  }
-  const eps = useGpu ? ["webgpu", "wasm"] : ["wasm"]; // wasm kept for op-level fallback
-
   const backend = {
     Tensor,
     meta: async () => await (await fetch(base + "meta.json")).json(),
-    session: (name) => makeSession(base, name, eps),
+    session: (name) => makeSession(base, name),
   };
   const ocr = await IndraOCR.create(backend, opts);
-  ocr.device = useGpu ? "webgpu" : "wasm";
+  ocr.device = "wasm";
   return ocr;
 }
 

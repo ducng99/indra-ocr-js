@@ -68,14 +68,14 @@ license: apache-2.0
 
 The [indra-ocr](https://huggingface.co/datalab-to/indra-ocr) ONNX models
 (tag v3.1.1) plus a browser loader that runs them on
-[onnxruntime-web](https://onnxruntime.ai/docs/get-started/web) — WebGPU or
-wasm.  The pre/post-processing is ported from the
+[onnxruntime-web](https://onnxruntime.ai/docs/get-started/web) (wasm).  The
+pre/post-processing is ported from the
 [indra-ocr Python package](https://github.com/datalab-to/indra).
 
 \`\`\`html
 <script type="importmap">
 { "imports": {
-    "onnxruntime-web": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0-dev.20250409-89f8206ba4/dist/ort.webgpu.bundle.min.mjs"
+    "onnxruntime-web": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0-dev.20250409-89f8206ba4/dist/ort.wasm.bundle.min.mjs"
 } }
 </script>
 <script type="module">
@@ -91,11 +91,9 @@ wasm.  The pre/post-processing is ported from the
 
 In a bundler/npm app, skip the importmap and install \`onnxruntime-web\`.
 
-Options: \`loadIndra(base, { device: "webgpu" | "wasm" | "auto", cjk: false, orient: false })\`.
-\`device: "auto"\` (default) picks WebGPU when the browser has an adapter and
-falls back to wasm otherwise; a WebGPU session that fails also falls back to
-wasm automatically.  Without cross-origin isolation (COOP/COEP) the wasm
-backend runs single-threaded.
+Options: \`loadIndra(base, { cjk: false, orient: false, order: false })\` skips
+optional models.  Without cross-origin isolation (COOP/COEP) the wasm backend
+runs single-threaded.
 `
 );
 console.log("+ README.md");

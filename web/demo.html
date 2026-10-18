@@ -3,16 +3,16 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>indra-ocr in the browser (ONNX Runtime: WebGPU / wasm)</title>
+<title>indra-ocr in the browser (ONNX Runtime: wasm)</title>
 <!--
-  The importmap pins onnxruntime-web's ESM build WITH WebGPU (the plain
-  bundle is wasm-only).  The wasm files resolve next to it on the CDN.  In a
-  bundler/npm app there is no importmap: just `npm i onnxruntime-web`.
+  The importmap pins onnxruntime-web's ESM wasm-only build.  The wasm files
+  resolve next to it on the CDN.  In a bundler/npm app there is no importmap:
+  just `npm i onnxruntime-web`.
 -->
 <script type="importmap">
 {
   "imports": {
-    "onnxruntime-web": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0-dev.20250409-89f8206ba4/dist/ort.webgpu.bundle.min.mjs"
+    "onnxruntime-web": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0-dev.20250409-89f8206ba4/dist/ort.wasm.bundle.min.mjs"
   }
 }
 </script>
@@ -40,18 +40,11 @@
 <body>
 <div id="side">
   <h3 style="margin:0 0 4px">indra-ocr</h3>
-  <div style="font-size:12px;color:#666">det + CTC rec + reading order, on onnxruntime-web (WebGPU / wasm)</div>
+  <div style="font-size:12px;color:#666">det + CTC rec + reading order, on onnxruntime-web (wasm)</div>
 
   <label for="base">Model base URL (your HF repo)</label>
   <input id="base" type="text" value="/models"
          placeholder="https://huggingface.co/USER/indra-ocr/resolve/main" />
-
-  <label>Device</label>
-  <select id="ep">
-    <option value="auto" selected>auto (WebGPU if available)</option>
-    <option value="webgpu">webgpu (falls back to wasm)</option>
-    <option value="wasm">wasm (CPU)</option>
-  </select>
 
   <div class="row">
     <label><input type="checkbox" id="cjk" checked /> CJK models</label>
@@ -81,11 +74,10 @@ let ocr = null, gray = null, page = null;
 async function ensureModel() {
   const base = $("base").value.trim();
   const opts = {
-    device: $("ep").value,
     cjk: $("cjk").checked,
     orient: $("orient").checked,
   };
-  const sig = JSON.stringify([base, opts.device, opts.cjk, opts.orient]);
+  const sig = JSON.stringify([base, opts.cjk, opts.orient]);
   if (ensureModel.sig !== sig) {
     status("loading models…");
     const t0 = performance.now();
@@ -161,9 +153,8 @@ drop.ondrop = (e) => {
 };
 
 // Hook for the headless test (web/test-browser.mjs).
-window.__test = async (imageUrl, base, device) => {
+window.__test = async (imageUrl, base) => {
   $("base").value = base ?? $("base").value;
-  if (device) $("ep").value = device;
   await showImage(imageUrl);
   await run();
   return {

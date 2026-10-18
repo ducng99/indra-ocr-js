@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "indra-ocr ONNX models in the browser (onnxruntime-web: WebGPU / wasm)",
+  "description": "indra-ocr ONNX models in the browser (onnxruntime-web: wasm)",
   "scripts": {
     "download": "node download-models.mjs",
     "serve": "node web/serve.mjs",
@@ -11,6 +11,7 @@
     "test:browser": "node web/test-browser.mjs"
   },
   "devDependencies": {
+    "esbuild": "^0.28.2",
     "puppeteer": "^25.14.0"
   }
 }
