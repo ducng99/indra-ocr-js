@@ -1,0 +1,16 @@
+{
+  "name": "indra-ocr-js",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "indra-ocr ONNX models in the browser (onnxruntime-web: WebGPU / wasm)",
+  "scripts": {
+    "download": "node download-models.mjs",
+    "serve": "node web/serve.mjs",
+    "prepare-repo": "node web/prepare-repo.mjs",
+    "test:browser": "node web/test-browser.mjs"
+  },
+  "devDependencies": {
+    "puppeteer": "^25.14.0"
+  }
+}
