@@ -31,15 +31,19 @@ inject its `Tensor` the same way via `IndraOCR.create(backend, opts)`.)
 
 ## Try it
 
+The demo is the Hugging Face Space in `space/` — a single self-contained
+`index.html` (app + library bundled inline by `space/build.mjs`; only the
+onnxruntime-web CDN module and the model downloads are external):
+
 ```sh
 npm install
-npm run download      # det/rec/order/script/rec_cjk/orient + meta.json from the Hub (v3.1.1)
-npm run serve         # -> http://127.0.0.1:8080/web/demo.html
+node space/build.mjs   # bundle space/app.mjs + src/ into space/index.html
+npm run serve          # -> http://127.0.0.1:8080/space/index.html
 ```
 
-The demo runs everything on the wasm backend. `npm run test:browser` runs the
-demo headless in Chrome and compares against the Python CLI (when the dev
-venv's `indra-ocr` is present).
+`npm run test:browser` runs the library headless in Chrome on the wasm backend
+and compares against the Python CLI (when the dev venv's `indra-ocr` is
+present).
 
 ## Use from your own Hugging Face repo
 
@@ -54,7 +58,7 @@ huggingface-cli upload YOUR-USERNAME/indra-ocr-web js/hf-repo/* . --repo-type mo
 ```html
 <script type="importmap">
 { "imports": {
-    "onnxruntime-web": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0-dev.20250409-89f8206ba4/dist/ort.wasm.bundle.min.mjs"
+    "onnxruntime-web": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.wasm.bundle.min.mjs"
 } }
 </script>
 <script type="module">
@@ -108,8 +112,8 @@ rotated_letter.png: 98 lines, identical  89 (90.8%)*
   Python CLI when `INDRA_OCR_BIN` points at an `indra-ocr` executable.
 - The Node runner (`ocr.mjs`/`compare.mjs`, `onnxruntime-node` + `sharp`) was
   removed — this is browser-only now. The remaining Node scripts
-  (`download-models.mjs`, `web/serve.mjs`, `web/prepare-repo.mjs`,
-  `web/test-browser.mjs`) are dev tooling only.
+  (`download-models.mjs`, `space/build.mjs`, `web/serve.mjs`,
+  `web/prepare-repo.mjs`, `web/test-browser.mjs`) are dev tooling only.
 - HF `resolve` endpoints send `Access-Control-Allow-Origin: *`, so the models
   (LFS/CDN redirects included) fetch fine from any page.
 - Without cross-origin isolation (COOP/COEP headers) ort-web runs the wasm

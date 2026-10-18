@@ -11,7 +11,7 @@
 //   import { loadIndra } from "https://huggingface.co/<repo>/resolve/main/indra-ocr-web.mjs";
 //   const ocr = await loadIndra("https://huggingface.co/<repo>/resolve/main");
 //
-// (onnxruntime-web comes from your importmap or npm — see demo.html.  Caveat:
+// (onnxruntime-web comes from your importmap or npm — see README.md.  Caveat:
 // if the Hub ever serves .mjs without a JavaScript MIME type, import the
 // library from npm/your own server instead and only fetch the models from
 // the Hub.)
@@ -75,7 +75,7 @@ pre/post-processing is ported from the
 \`\`\`html
 <script type="importmap">
 { "imports": {
-    "onnxruntime-web": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0-dev.20250409-89f8206ba4/dist/ort.wasm.bundle.min.mjs"
+    "onnxruntime-web": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.wasm.bundle.min.mjs"
 } }
 </script>
 <script type="module">

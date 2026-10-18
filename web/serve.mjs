@@ -1,5 +1,6 @@
-// Tiny static server for the demo: serves this package's root, so
-//   http://127.0.0.1:8080/web/demo.html   (models at /models)
+// Tiny static server: serves this package's root, so
+//   http://127.0.0.1:8080/space/index.html         (HF space demo; models from the Hub)
+//   http://127.0.0.1:8080/web/indra-ocr-web.mjs    (library; models at /models)
 // Usage: node web/serve.mjs [port]
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
@@ -36,5 +37,5 @@ createServer(async (req, res) => {
     res.writeHead(404).end("not found");
   }
 }).listen(port, "127.0.0.1", () => {
-  console.log(`serving ${root} at http://127.0.0.1:${port}/web/demo.html`);
+  console.log(`serving ${root} at http://127.0.0.1:${port}/space/index.html`);
 });
