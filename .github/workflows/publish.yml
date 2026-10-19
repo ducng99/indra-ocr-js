@@ -36,6 +36,6 @@ jobs:
         run: npm test
 
       - name: Publish
-        run: npm stage publish
+        run: npm stage publish --provenance --tag latest
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
