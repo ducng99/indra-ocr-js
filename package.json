@@ -1,6 +1,6 @@
 {
   "name": "@ducng99/indra-ocr-js",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "indra-ocr ONNX models in JavaScript — browser (onnxruntime-web, wasm) and Node (onnxruntime-node): line detection, recognition (Latin + CJK), reading order, orientation",
   "license": "Apache-2.0",
   "type": "module",
