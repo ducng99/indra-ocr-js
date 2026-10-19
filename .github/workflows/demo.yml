@@ -58,41 +58,24 @@ jobs:
   hf-space:
     needs: build
     runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write  # required so the job can request an OIDC token
+      contents: read
+
     steps:
       - uses: actions/download-artifact@v8
         with:
           name: demo-dist
           path: dist
 
-      - name: Push to the Hugging Face Space
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_SPACE: ${{ vars.HF_SPACE }}
+      - name: Install the hf CLI
         run: |
-          if [ -z "$HF_TOKEN" ] || [ -z "$HF_SPACE" ]; then
-            echo "::error::set the HF_TOKEN secret and the HF_SPACE variable (owner/name of a sdk:static Space)"
-            exit 1
-          fi
-          git clone --depth 1 "https://${HF_SPACE%%/*}:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE}" space
-          find space -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
-          cp dist/* space/
-          cat > space/README.md <<MD
-          ---
-          title: indra-ocr demo
-          emoji: 🔍
-          colorFrom: indigo
-          colorTo: pink
-          sdk: static
-          short_description: OCR in the browser — indra-ocr-js bundled with bun
-          pinned: false
-          ---
+          curl -LsSf https://hf.co/cli/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-          Demo webapp for [indra-ocr-js](https://github.com/ducng99/indra-ocr-js),
-          built with bun by the Deploy demo workflow from commit ${GITHUB_SHA::7}.
-          OCR (detection + recognition + reading order + orientation) runs fully
-          client-side on onnxruntime-web; the models stream from the Hugging Face Hub.
-          MD
-          git -C space add -A
-          git -C space -c user.name=github-actions[bot] -c user.email=41898282+github-actions[bot]@users.noreply.github.com \
-            commit -m "Deploy demo from ${GITHUB_SHA::7}" || echo "no changes"
-          git -C space push
+      - name: Push to the Hugging Face Space
+        working-directory: dist
+        env:
+          HF_OIDC_RESOURCE: ${{ vars.HF_SPACE }}
+        run: hf upload "${{ vars.HF_SPACE }}" . --repo-type space
