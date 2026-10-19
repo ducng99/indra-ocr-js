@@ -98,7 +98,6 @@
   #viewport.drag { outline: 2px dashed var(--good); outline-offset: -10px; }
   #pageWrap { position: relative; margin: auto; padding: 24px; width: max-content; }
   #cv { display: block; background: #fff; box-shadow: 0 8px 40px rgba(0, 0, 0, 0.55); }
-  #cv.fit { max-width: calc(100% - 48px); max-height: calc(100% - 48px); width: auto; height: auto; }
   #overlay { position: absolute; inset: 24px; }
   .box {
     position: absolute; border: 1.5px solid var(--box); border-radius: 2px;
@@ -219,7 +218,7 @@
   <section id="stage">
     <div id="viewport">
       <div id="pageWrap" hidden>
-        <canvas id="cv" class="fit"></canvas>
+        <canvas id="cv"></canvas>
         <div id="overlay"></div>
       </div>
       <div id="empty">

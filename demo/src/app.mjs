@@ -261,20 +261,31 @@ function paintGray(g) {
   applyZoom();
 }
 
-function applyZoom() {
-  const z = state.zoom;
-  ui.cv.classList.toggle("fit", z === "fit");
-  ui.cv.style.width = z === "fit" ? "" : `${Math.round(state.shown.width * z)}px`;
-  ui.zpct.textContent = z === "fit" ? "fit" : `${Math.round(z * 100)}%`;
+// Fit is computed in JS (explicit px on the canvas), never in CSS: a
+// percentage max-width against the max-content-sized pageWrap is cyclic — the
+// canvas ends up 2×padding narrower than the overlay and boxes skew sideways.
+function fitScale() {
+  const vw = ui.viewport.clientWidth - 48, vh = ui.viewport.clientHeight - 48;
+  return Math.max(0.05, Math.min(1, vw / state.shown.width, vh / state.shown.height));
 }
 
-ui.zin.onclick = () => setZoom((state.zoom === "fit" ? 1 : state.zoom) * 1.25);
-ui.zout.onclick = () => setZoom(Math.min(5, Math.max(0.15, (state.zoom === "fit" ? 1 : state.zoom) / 1.25)));
+function applyZoom() {
+  const fit = state.zoom === "fit";
+  const z = fit ? fitScale() : state.zoom;
+  ui.cv.style.width = `${Math.round(state.shown.width * z)}px`;
+  ui.zpct.textContent = fit ? "fit" : `${Math.round(z * 100)}%`;
+}
+
+ui.zin.onclick = () => setZoom((state.zoom === "fit" ? fitScale() : state.zoom) * 1.25);
+ui.zout.onclick = () => setZoom(Math.min(5, Math.max(0.15, (state.zoom === "fit" ? fitScale() : state.zoom) / 1.25)));
 ui.zfit.onclick = () => setZoom("fit");
 function setZoom(z) {
   state.zoom = z;
   applyZoom();
 }
+new ResizeObserver(() => {
+  if (state.zoom === "fit" && state.shown) applyZoom();
+}).observe(ui.viewport);
 
 async function showImage(src) {
   const g = await readGray(src);
