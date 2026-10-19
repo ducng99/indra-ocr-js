@@ -77,5 +77,5 @@ jobs:
       - name: Push to the Hugging Face Space
         working-directory: dist
         env:
-          HF_OIDC_RESOURCE: ${{ vars.HF_SPACE }}
+          HF_OIDC_RESOURCE: spaces/${{ vars.HF_SPACE }}
         run: hf upload "${{ vars.HF_SPACE }}" . --repo-type space
