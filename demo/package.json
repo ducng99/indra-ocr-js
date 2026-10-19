@@ -1,0 +1,11 @@
+{
+  "name": "indra-ocr-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/app.mjs --outfile dist/app.js --target browser --minify --external onnxruntime-web && cp index.html dist/index.html"
+  },
+  "dependencies": {
+    "onnxruntime-web": "^1.30.0"
+  }
+}

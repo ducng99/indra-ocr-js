@@ -1,0 +1,98 @@
+# Builds demo/ with bun and pushes the bundle to GitHub Pages and to a
+# Hugging Face Space (static SDK) in parallel.  Manual runs only.
+#
+# One-time repo setup:
+#   - Pages: Settings → Pages → Build and deployment → Source: GitHub Actions
+#   - secret HF_TOKEN: Hugging Face token with write access to the Space
+#   - variable HF_SPACE: Space to update, as "owner/name" (sdk: static)
+name: Deploy demo
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: demo-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build demo
+        working-directory: demo
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: demo/dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demo-dist
+          path: demo/dist
+
+  github-pages:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+  hf-space:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: demo-dist
+          path: dist
+
+      - name: Push to the Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE: ${{ vars.HF_SPACE }}
+        run: |
+          if [ -z "$HF_TOKEN" ] || [ -z "$HF_SPACE" ]; then
+            echo "::error::set the HF_TOKEN secret and the HF_SPACE variable (owner/name of a sdk:static Space)"
+            exit 1
+          fi
+          git clone --depth 1 "https://${HF_SPACE%%/*}:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE}" space
+          find space -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp dist/* space/
+          cat > space/README.md <<MD
+          ---
+          title: indra-ocr demo
+          emoji: 🔍
+          colorFrom: indigo
+          colorTo: pink
+          sdk: static
+          short_description: OCR in the browser — indra-ocr-js bundled with bun
+          pinned: false
+          ---
+
+          Demo webapp for [indra-ocr-js](https://github.com/ducng99/indra-ocr-web),
+          built with bun by the Deploy demo workflow from commit ${GITHUB_SHA::7}.
+          OCR (detection + recognition + reading order + orientation) runs fully
+          client-side on onnxruntime-web; the models stream from the Hugging Face Hub.
+          MD
+          git -C space add -A
+          git -C space -c user.name=github-actions[bot] -c user.email=41898282+github-actions[bot]@users.noreply.github.com \
+            commit -m "Deploy demo from ${GITHUB_SHA::7}" || echo "no changes"
+          git -C space push

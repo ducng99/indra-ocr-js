@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>indra-ocr playground</title>
+<link rel="icon" href="data:," />
+<!--
+  Demo playground for @ducng99/indra-ocr-js, bundled with bun
+  (`bun run build` → dist/app.js + this page).  Everything runs client-side;
+  the only external loads are absolute: onnxruntime-web, pinned below via the
+  import map (the bundle keeps that import external), and the ONNX models from
+  the Hugging Face repo named in Settings.
+-->
+<script type="importmap">
+{
+  "imports": {
+    "onnxruntime-web": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.wasm.bundle.min.mjs"
+  }
+}
+</script>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0e1013; --panel: #151920; --raise: #1b212b; --line: #273040;
+    --text: #e8ebf1; --dim: #98a2b3; --faint: #5d6675;
+    --accent: #8b96ff; --accent-ink: #0e1013; --good: #3fd8b6; --err: #ff7a76;
+    --box: rgba(139, 150, 255, 0.85); --box-hot: #3fd8b6;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column;
+  }
+  button {
+    font: inherit; color: var(--text); background: var(--raise);
+    border: 1px solid var(--line); border-radius: 7px; padding: 5px 11px;
+    cursor: pointer; transition: border-color 0.12s, background 0.12s;
+  }
+  button:hover:not(:disabled) { border-color: #3d4964; background: #222937; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  input[type="text"] {
+    font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 7px; padding: 5px 9px; width: 100%;
+  }
+  input[type="text"]:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* ── header ─────────────────────────────────────────── */
+  header {
+    display: flex; align-items: center; gap: 16px; padding: 9px 16px;
+    border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .brand .glyph {
+    width: 30px; height: 30px; border-radius: 8px; flex: none;
+    background: linear-gradient(135deg, var(--accent), var(--good));
+    display: grid; place-items: center; font-size: 16px;
+  }
+  .brand h1 { font-size: 15px; margin: 0; letter-spacing: 0.2px; white-space: nowrap; }
+  .brand h1 em { font-style: normal; color: var(--dim); font-weight: 400; }
+  .brand p { margin: 0; font-size: 11px; color: var(--faint); white-space: nowrap; }
+  .grow { flex: 1; }
+  .settings { position: relative; }
+  #panel {
+    position: absolute; right: 0; top: calc(100% + 8px); z-index: 30;
+    width: 300px; padding: 12px; background: var(--raise);
+    border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  }
+  #panel label { display: block; font-size: 11px; color: var(--dim); margin-bottom: 4px; }
+  #panel .opts { display: flex; gap: 14px; margin-top: 10px; }
+  #panel .opts label { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; color: var(--text); cursor: pointer; }
+  #panel .note { font-size: 11px; color: var(--faint); margin: 10px 0 0; }
+  #run { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 650; padding: 6px 16px; }
+  #run:hover:not(:disabled) { background: #a3abff; border-color: #a3abff; }
+
+  /* model download bar */
+  #pbar { height: 3px; background: var(--panel); position: relative; overflow: hidden; }
+  #pbar i {
+    position: absolute; inset: 0; transform-origin: 0 50%; transform: scaleX(0);
+    background: linear-gradient(90deg, var(--accent), var(--good));
+    transition: transform 0.15s;
+  }
+  #pbar.indet i { transform: scaleX(0.25); animation: slide 1.1s ease-in-out infinite alternate; }
+  @keyframes slide { to { transform: scaleX(1); } }
+
+  /* ── main split ─────────────────────────────────────── */
+  main { flex: 1; display: flex; min-height: 0; }
+  #stage { flex: 1.6; display: flex; flex-direction: column; min-width: 0; }
+  #viewport {
+    flex: 1; position: relative; overflow: auto; min-height: 0;
+    background: radial-gradient(circle, rgba(255,255,255,0.045) 1px, transparent 1.4px) 0 0 / 22px 22px, #0a0c0f;
+  }
+  #viewport.drag { outline: 2px dashed var(--good); outline-offset: -10px; }
+  #pageWrap { position: relative; margin: auto; padding: 24px; width: max-content; }
+  #cv { display: block; background: #fff; box-shadow: 0 8px 40px rgba(0, 0, 0, 0.55); }
+  #cv.fit { max-width: calc(100% - 48px); max-height: calc(100% - 48px); width: auto; height: auto; }
+  #overlay { position: absolute; inset: 24px; }
+  .box {
+    position: absolute; border: 1.5px solid var(--box); border-radius: 2px;
+    cursor: pointer; transition: background 0.1s, border-color 0.1s;
+  }
+  .box:hover, .box.hot { border-color: var(--box-hot); background: rgba(63, 216, 182, 0.16); }
+
+  /* empty state */
+  #empty {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 10px; text-align: center;
+  }
+  #empty .hint { font-size: 15px; color: var(--dim); }
+  #empty .hint b { color: var(--text); font-weight: 600; }
+  #empty .or { font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: 1.5px; margin-top: 10px; }
+  #samples { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; padding: 0 24px; }
+  #samples button {
+    display: flex; flex-direction: column; gap: 6px; padding: 8px; width: 128px;
+    background: var(--panel); align-items: center;
+  }
+  #samples .thumb {
+    height: 84px; width: 112px; background: #fff; border-radius: 3px;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35); overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #samples .thumb canvas { max-width: 100%; max-height: 100%; }
+  #samples .lbl { font-size: 11px; color: var(--dim); }
+
+  /* stage bar */
+  #stagebar {
+    display: flex; align-items: center; gap: 8px; padding: 7px 12px;
+    border-top: 1px solid var(--line); background: var(--panel); font-size: 12px; color: var(--dim);
+  }
+  #stagebar button { padding: 3px 9px; font-size: 12px; }
+  #zpct { min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; }
+  #dims { font-variant-numeric: tabular-nums; color: var(--faint); }
+
+  /* ── results rail ───────────────────────────────────── */
+  #rail {
+    flex: 1; min-width: 330px; max-width: 44%; display: flex; flex-direction: column;
+    border-left: 1px solid var(--line); background: var(--panel); min-height: 0;
+  }
+  #railhead { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  .tab {
+    border: none; background: none; color: var(--dim); padding: 5px 10px; border-radius: 6px;
+    font-size: 12.5px; font-weight: 550;
+  }
+  .tab:hover:not(:disabled) { background: var(--raise); color: var(--text); }
+  .tab.on { background: var(--raise); color: var(--text); }
+  .tab:disabled { opacity: 0.35; }
+  #copy { margin-left: auto; padding: 4px 10px; font-size: 12px; }
+  #scroll { flex: 1; overflow: auto; min-height: 0; }
+  #lines { padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+  .row {
+    display: flex; align-items: center; gap: 9px; padding: 5px 8px; border-radius: 6px;
+    cursor: default; border: 1px solid transparent;
+  }
+  .row:hover, .row.hot { background: var(--raise); border-color: var(--line); }
+  .row .idx { flex: none; width: 20px; text-align: right; color: var(--faint); font: 11px var(--mono); }
+  .row .txt { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .row .conf { flex: none; width: 42px; height: 4px; border-radius: 2px; background: #0a0c0f; overflow: hidden; }
+  .row .conf i { display: block; height: 100%; background: var(--good); }
+  .row .pct { flex: none; width: 34px; text-align: right; color: var(--faint); font: 10.5px var(--mono); }
+  #mdview {
+    margin: 0; padding: 12px; flex: 1; font: 12.5px/1.6 var(--mono);
+    white-space: pre-wrap; overflow-wrap: anywhere; color: var(--dim);
+  }
+  #ph { padding: 40px 20px; text-align: center; color: var(--faint); font-size: 13px; }
+
+  /* ── status bar ─────────────────────────────────────── */
+  #statusbar {
+    display: flex; align-items: center; gap: 8px; padding: 6px 14px;
+    border-top: 1px solid var(--line); background: var(--panel);
+    font-size: 12px; color: var(--dim); min-height: 33px;
+  }
+  #status.err { color: var(--err); }
+  .chip {
+    flex: none; font: 11px var(--mono); color: var(--dim);
+    background: var(--raise); border: 1px solid var(--line);
+    padding: 2px 7px; border-radius: 99px; white-space: nowrap;
+  }
+  .chip.good { color: var(--good); border-color: rgba(63, 216, 182, 0.4); }
+  @media (max-width: 760px) {
+    main { flex-direction: column; }
+    #rail { max-width: none; min-width: 0; border-left: none; border-top: 1px solid var(--line); }
+    .brand p { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="glyph">👁</div>
+    <div>
+      <h1>indra-ocr <em>playground</em></h1>
+      <p>detection · recognition · reading order · orientation — on-device, onnxruntime-web (wasm)</p>
+    </div>
+  </div>
+  <span class="grow"></span>
+  <div class="settings">
+    <button id="gear" aria-haspopup="true" aria-expanded="false">Settings</button>
+    <div id="panel" hidden>
+      <label for="models">Model repo (HF <code>user/repo[@rev]</code> or URL)</label>
+      <input id="models" type="text" spellcheck="false" value="datalab-to/indra-ocr@v3.1.1" />
+      <div class="opts">
+        <label><input type="checkbox" id="cjk" checked /> CJK models</label>
+        <label><input type="checkbox" id="orient" checked /> orientation</label>
+      </div>
+      <p class="note">Changed settings reload the models on the next run (~18 MB, cached by the browser).</p>
+    </div>
+  </div>
+  <button id="run" disabled>Run OCR</button>
+</header>
+<div id="pbar" hidden><i></i></div>
+
+<main>
+  <section id="stage">
+    <div id="viewport">
+      <div id="pageWrap" hidden>
+        <canvas id="cv" class="fit"></canvas>
+        <div id="overlay"></div>
+      </div>
+      <div id="empty">
+        <div class="hint"><b>Drop an image</b> anywhere, or paste from the clipboard</div>
+        <div class="or">— or try a sample —</div>
+        <div id="samples"></div>
+      </div>
+    </div>
+    <div id="stagebar">
+      <button id="open">Open image…</button>
+      <input id="file" type="file" accept="image/*" hidden />
+      <button id="pick" hidden>Samples</button>
+      <span class="sep" style="width:1px;height:18px;background:var(--line)"></span>
+      <button id="zout" title="zoom out">−</button>
+      <span id="zpct">fit</span>
+      <button id="zin" title="zoom in">+</button>
+      <button id="zfit">Fit</button>
+      <span class="grow"></span>
+      <span id="dims"></span>
+    </div>
+  </section>
+
+  <aside id="rail">
+    <div id="railhead">
+      <button class="tab on" data-v="text">Lines</button>
+      <button class="tab" data-v="md" disabled>Markdown</button>
+      <button id="copy" title="Copy text to clipboard">Copy</button>
+    </div>
+    <div id="scroll">
+      <div id="lines" hidden></div>
+      <pre id="mdview" hidden></pre>
+      <div id="ph">Recognized lines land here, in reading order.<br/>Hover a line to find it on the page.</div>
+    </div>
+  </aside>
+</main>
+
+<footer id="statusbar">
+  <span id="status">loading is lazy — models stream in on the first run</span>
+  <span class="grow"></span>
+  <span id="chips"></span>
+</footer>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
