@@ -1,5 +1,5 @@
 // Line crop rule and batching, ported from indra_ocr/rec_preproc.py.
-import { resizeGray, roundPy } from "./imaging.mjs";
+import { resizeGray, roundHalfEven } from "./imaging.mjs";
 
 export const LINE_HEIGHT = 32;
 export const PAD_Y = 0.2;
@@ -36,7 +36,7 @@ export function cropLine(gray, box, height = LINE_HEIGHT, maxW = 4096) {
       for (let c = sx0; c < sx1; c++) crop[dstRow + (c - ix0)] = gray.data[srcRow + c];
     }
   }
-  const outW = Math.max(WIDTH_MULTIPLE, Math.min(maxW, roundPy((cw * height) / ch)));
+  const outW = Math.max(WIDTH_MULTIPLE, Math.min(maxW, roundHalfEven((cw * height) / ch)));
   const resized = resizeGray(crop, cw, ch, outW, height, ch > height ? "area" : "linear");
   const ink = new Float32Array(resized.length);
   for (let i = 0; i < resized.length; i++) ink[i] = 1 - resized[i] / 255;

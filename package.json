@@ -1,17 +1,51 @@
 {
-  "name": "indra-ocr-js",
+  "name": "@ducng99/indra-ocr-js",
   "version": "0.1.0",
-  "private": true,
+  "description": "indra-ocr ONNX models in JavaScript — browser (onnxruntime-web, wasm) and Node (onnxruntime-node): line detection, recognition (Latin + CJK), reading order, orientation",
+  "license": "Apache-2.0",
   "type": "module",
-  "description": "indra-ocr ONNX models in the browser (onnxruntime-web: wasm)",
+  "main": "./src/index.mjs",
+  "module": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./browser": "./src/browser.mjs"
+  },
+  "sideEffects": false,
+  "files": [
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "download": "node download-models.mjs",
-    "serve": "node web/serve.mjs",
-    "prepare-repo": "node web/prepare-repo.mjs",
-    "test:browser": "node web/test-browser.mjs"
+    "test": "node test/browser.mjs",
+    "test:node": "node test/node.mjs"
+  },
+  "dependencies": {
+    "onnxruntime-web": "^1.30.0"
+  },
+  "optionalDependencies": {
+    "onnxruntime-node": "^1.30.0",
+    "sharp": "^0.35.0"
   },
   "devDependencies": {
-    "esbuild": "^0.28.2",
     "puppeteer": "^25.14.0"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ducng99/indra-ocr-js.git"
+  },
+  "keywords": [
+    "ocr",
+    "onnx",
+    "indra-ocr"
+  ],
+  "allowScripts": {
+    "onnxruntime-node@1.30.0": true,
+    "puppeteer@25.14.0": true,
+    "protobufjs@7.6.6": true
   }
 }

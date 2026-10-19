@@ -2,7 +2,7 @@
 // order model's decoding (blocks -> lines inside blocks) and the geometric
 // baselines (XY-cut, top-down rows).
 
-import { median, roundPy } from "./imaging.mjs";
+import { median, roundHalfEven } from "./imaging.mjs";
 
 const N_FEATS = 16;
 // chandra block labels of the layout head ("cls") output
@@ -168,7 +168,7 @@ export function topDown(boxes) {
   if (!boxes.length) return [];
   const medH = median(boxes.map((b) => b[3] - b[1]));
   return boxes
-    .map((b, i) => [roundPy((b[1] + b[3]) / 2 / Math.max(medH * 0.5, 1e-3)), b[0], i])
+    .map((b, i) => [roundHalfEven((b[1] + b[3]) / 2 / Math.max(medH * 0.5, 1e-3)), b[0], i])
     .sort((p, q) => p[0] - q[0] || p[1] - q[1])
     .map((t) => t[2]);
 }

@@ -4,8 +4,8 @@
 // and it keeps the code browser-portable (image decoding lives in
 // node-io.mjs / the app).
 
-// Python round(): half to even.
-export function roundPy(x) {
+// Round half to even (needed to match the reference implementation's output).
+export function roundHalfEven(x) {
   const f = Math.floor(x);
   const d = x - f;
   if (d > 0.5) return f + 1;

@@ -1,16 +1,16 @@
 // The indra-ocr pipeline, ported from indra_ocr/pipeline.py and friends.
 // Pure ESM (no Node or browser APIs): the ONNX Runtime sessions and the
-// Tensor class come from an injected backend — web/indra-ocr-web.mjs builds
-// one on onnxruntime-web (wasm).
+// Tensor class come from an injected backend — src/index.mjs builds one on
+// onnxruntime-web (wasm).
 //
 // Not ported here (the models are optional in the Python package too):
 // orient.onnx's deskew step (estimate_skew), mask.onnx (not in this model
 // revision), the math models, and the markdown/block assembly.
-import { pageToInput, decode as decodeDet } from "./det.mjs";
+import { pageToInput, decodeBoxes } from "./det.mjs";
 import { cropLine, padBatch, widthBatches, PAD_X } from "./rec.mjs";
 import { lineFeatures, decodeBlocksOrder, decodeOrder, xyCut, BLOCK_CLASSES } from "./order.mjs";
 import { Vocab } from "./vocab.mjs";
-import { clamp, median, resizeGray, rotQuarterCW, roundPy } from "./imaging.mjs";
+import { clamp, median, resizeGray, rotQuarterCW, roundHalfEven } from "./imaging.mjs";
 
 const ADAPTIVE_MIN_H = 9.0;
 const ADAPTIVE_TARGET_H = 12.0;
@@ -73,7 +73,7 @@ export class IndraOCR {
     const { x, ph, pw, scale } = pageToInput(gray, longSide);
     const { out } = await this.det.run({ x: new this.Tensor("float32", x, [1, 1, ph, pw]) });
     const [, , h, w] = out.dims;
-    return { boxes: decodeDet(out.data, h, w), scale };
+    return { boxes: decodeBoxes(out.data, h, w), scale };
   }
 
   /** Line boxes (x0, y0, x1, y1, score) of a page, in page pixels. */
@@ -288,8 +288,8 @@ export class IndraOCR {
     const h = gray.height;
     const w = gray.width;
     const s = side / Math.max(h, w);
-    const nh = Math.max(1, roundPy(h * s));
-    const nw = Math.max(1, roundPy(w * s));
+    const nh = Math.max(1, roundHalfEven(h * s));
+    const nw = Math.max(1, roundHalfEven(w * s));
     const small =
       nh === h && nw === w ? gray.data : resizeGray(gray.data, w, h, nw, nh, "area");
     const x = new Float32Array(side * side);
@@ -305,7 +305,7 @@ export class IndraOCR {
 
   /** OCR of a page image ({data: Uint8Array, width, height}, grayscale):
    *  {lines: [{box, text, conf}] in reading order, rotation, text}. */
-  async __call__(gray, turn = true) {
+  async run(gray, turn = true) {
     const k = turn ? await this.orientation(gray) : 0;
     if (k) gray = rotQuarterCW(gray, k);
     const boxes = await this.detect(gray);

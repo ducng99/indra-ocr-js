@@ -1,123 +1,81 @@
-# indra-ocr in the browser (ONNX Runtime: wasm)
+# @ducng99/indra-ocr-js
 
-Can the [datalab-to/indra-ocr](https://huggingface.co/datalab-to/indra-ocr) `.onnx`
-files be used with [transformers.js](https://huggingface.co/docs/transformers.js)?
+OCR in JavaScript with the [indra-ocr](https://huggingface.co/datalab-to/indra-ocr) ONNX models: line detection, recognition (Latin + CJK), reading order, and quarter-turn orientation. Runs in Node on [onnxruntime-node](https://onnxruntime.ai/docs/get-started/node) and in the browser on [onnxruntime-web](https://onnxruntime.ai/docs/get-started/web)'s wasm backend — all locally, no server.
 
-**Through the standard transformers.js API — no.** The repo ships custom
-architectures (`model_type: "indra-ocr"`), not transformers models: there is no
-transformers `config.json`/weights layout and no `onnx/model.onnx`, so
-`pipeline()` and `AutoModel.from_pretrained()` both fail.
+The pre- and post-processing is ported 1:1 from the [indra-ocr Python package](https://github.com/datalab-to/indra), and every module mirrors its Python source: `det.mjs` ← `det_post.py`, `rec.mjs` ← `rec_preproc.py`, `order.mjs` ← `order_post.py`, `vocab.mjs` ← `vocab.py`, `pipeline.mjs` ← `pipeline.py`.
 
-**On transformers.js's ONNX Runtime backend — yes.** transformers.js is built
-on onnxruntime-web in the browser; this directory runs the raw
-`det.onnx` / `rec.onnx` / `order.onnx` / `script.onnx` + `rec_cjk.onnx` /
-`orient.onnx` sessions on that runtime directly (wasm), with the
-pre- and post-processing ported 1:1 from the Python package:
+`src/pipeline.mjs` is pure ESM (no Node or browser APIs); the ONNX sessions and `Tensor` are injected by a backend, which `src/index.mjs` builds on onnxruntime-node (the default entry) and `src/browser.mjs` on onnxruntime-web (`@ducng99/indra-ocr-js/browser`).
 
-| Python | here |
-| --- | --- |
-| `det_post.py` (`page_to_input`, `decode`) | `src/det.mjs` |
-| `rec_preproc.py` (`crop_line`, `pad_batch`, `width_batches`) | `src/rec.mjs` |
-| `order_post.py` (`line_features`, `decode_order`, `decode_blocks_order`, `_cluster`, XY-cut) | `src/order.mjs` |
-| `vocab.py` (`Vocab.decode`) | `src/vocab.mjs` |
-| `pipeline.py` (`OrtOCR`: detect / recognize / gutter cuts / line split / assemble / orientation) | `src/pipeline.mjs` |
-| cv2 resize / grayscale / rot90 | `src/imaging.mjs` (separable INTER_AREA/INTER_LINEAR taps, Rec.601 luma) |
-| `cv2.imread(..., IMREAD_GRAYSCALE)` | `readGrayBrowser()` in `web/indra-ocr-web.mjs` |
+## Install
 
-`src/` is pure ESM (no Node/browser APIs); the sessions and `Tensor` are
-injected by a backend — `web/indra-ocr-web.mjs` builds one on
-onnxruntime-web. (In a bundler app that also uses transformers.js you can
-inject its `Tensor` the same way via `IndraOCR.create(backend, opts)`.)
+```sh
+npm install @ducng99/indra-ocr-js
+```
 
-## Try it
+The six `.onnx` files plus `meta.json` (~18 MB) are not part of the package.
 
-The demo is the Hugging Face Space in `space/` — a single self-contained
-`index.html` (app + library bundled inline by `space/build.mjs`; only the
-onnxruntime-web CDN module and the model downloads are external):
+`loadIndra(base)` loads them at runtime from a base URL — or, in Node, a local directory — you choose.
+
+Hugging Face `resolve` endpoints send permissive CORS headers, so the pinned upstream revision works out of the box.
+
+`base` also accepts a HF repo shorthand: `"user/repo"` expands to `https://huggingface.co/user/repo/resolve/main`, and `"user/repo@rev"` pins a revision — `loadIndra("datalab-to/indra-ocr@v3.1.1")` is the URL above.
+
+For production, upload the model files (they are the only thing you need to host — no code) to your own repo or any CORS-enabled static host, so upstream changes can never break your app.
+
+The Node entry's native dependencies (`onnxruntime-node`, `sharp`) are optional: browser-only installs can skip them with `npm install --omit=optional`.
+
+## Usage
+
+Node (the default import; `base` may be a local directory):
+
+```js
+import { loadIndra, readGray } from "@ducng99/indra-ocr-js";
+
+const ocr = await loadIndra(
+  "https://huggingface.co/datalab-to/indra-ocr/resolve/v3.1.1"
+);
+const page = await ocr.run(await readGray("page.png"));
+console.log(page.text);
+// page: { lines: [{box: [x0, y0, x1, y1], text, conf}], rotation, text }
+```
+
+Browser (`@ducng99/indra-ocr-js/browser`; without a bundler, add an importmap that resolves the bare `onnxruntime-web` import to the jsdelivr `ort.wasm.bundle.min.mjs`):
+
+```js
+import { loadIndra, readGray } from "@ducng99/indra-ocr-js/browser";
+// same API as above
+```
+
+`loadIndra(base, opts)` takes these options:
+
+- `cjk: false` skips `script.onnx` and `rec_cjk.onnx` (about 9.5 MB smaller, Latin-only output).
+- `order: false` skips `order.onnx` and falls back to geometric reading order.
+- `orient: false` skips `orient.onnx` and disables rotation detection.
+- `providers` (Node) overrides the onnxruntime execution providers (default `["cpu"]`).
+- `wasmPaths` (browser) overrides where onnxruntime-web loads its `.wasm` binaries from.
+
+Missing optional model files degrade silently instead of throwing.
+
+Without COOP/COEP headers the wasm backend runs single-threaded.
+
+## API
+
+Both entries export the same `{ loadIndra, readGray, IndraOCR }`. `ocr.detect(gray)` returns line boxes, `ocr.recognize(gray, boxes)` returns per-line `{text, conf, toks}`, `ocr.readingOrder(boxes, texts, [w, h])` returns ordering indices, and `ocr.orientation(gray)` returns detected quarter turns. `readGray` takes a URL or Blob in the browser, a file path or Buffer in Node.
+
+`IndraOCR.create({ Tensor, meta, session }, opts)` builds the pipeline on a custom backend, for example sharing a transformers.js `Tensor`.
+
+## Scope
+
+Deskew, the mask and math models, markdown block assembly, and PDF input are not ported from Python.
+
+Output text matches the Python CLI except for occasional boundary glyphs (`1`/`l`, `0`/`O`), because the JS preprocessing is not bit-identical to cv2.
+
+## Development
 
 ```sh
 npm install
-node space/build.mjs   # bundle space/app.mjs + src/ into space/index.html
-npm run serve          # -> http://127.0.0.1:8080/space/index.html
+npm test                   # synthetic-page smoke test in headless Chrome
+npm test page.png ...      # real images; INDRA_OCR_BIN=/path/to/indra-ocr for parity check
 ```
 
-`npm run test:browser` runs the library headless in Chrome on the wasm backend
-and compares against the Python CLI (when the dev venv's `indra-ocr` is
-present).
-
-## Use from your own Hugging Face repo
-
-```sh
-node web/prepare-repo.mjs YOUR-USERNAME/indra-ocr-web   # -> js/hf-repo/
-huggingface-cli upload YOUR-USERNAME/indra-ocr-web js/hf-repo/* . --repo-type model
-```
-
-`js/hf-repo/` gets the six `.onnx` files + `meta.json`, the pure ESM library
-(`indra-ocr-web.mjs` + `src/`), and a README. Your app then needs only:
-
-```html
-<script type="importmap">
-{ "imports": {
-    "onnxruntime-web": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.wasm.bundle.min.mjs"
-} }
-</script>
-<script type="module">
-  import { loadIndra, readGrayBrowser } from
-    "https://huggingface.co/YOUR-USERNAME/indra-ocr-web/resolve/main/indra-ocr-web.mjs";
-  const ocr = await loadIndra("https://huggingface.co/YOUR-USERNAME/indra-ocr-web/resolve/main");
-  const page = await ocr.__call__(await readGrayBrowser("page.png"));
-  console.log(page.text);   // page.lines: [{box, text, conf}], page.rotation
-</script>
-```
-
-API: `loadIndra(base, opts)` with
-`opts.cjk / opts.order / opts.orient` (skip optional models),
-`opts.wasmPaths` (ort wasm location override);
-`ocr.device` is always `"wasm"`.
-In a bundler/npm app, skip the importmap and `npm i onnxruntime-web`.
-
-## Parity with the Python package
-
-`npm run test:browser` (headless Chrome, wasm): line counts, line splitting
-and reading order match the Python CLI exactly; residual text differences are
-boundary-case glyphs (`1`/`l`, `|`/`I`, `0`/`O`, `,`/`.`) — the JS
-preprocessing is not bit-identical to cv2 (independent float accumulation,
-±2/255 on the ink maps), enough to flip an occasional low-margin CTC peak.
-
-```
-table_pmc.png:     188 lines, identical 160 (85.1%)
-chinese_essay.png:  44 lines, identical  35 (79.5%)   (rec_cjk path)
-multi_column.png:  138 lines, identical 124 (89.9%)*   (*measured earlier via the Node runner, same pure src/)
-rotated_letter.png: 98 lines, identical  89 (90.8%)*
-```
-
-## Not ported
-
-- `estimate_skew` / deskew (small tilts are left alone; quarter-turn
-  orientation **is** ported via `orient.onnx`)
-- `mask.onnx` CenterMask (not in this model revision)
-- the math models (`math_*.onnx`)
-- markdown / block assembly from the order model's layout heads (lines and
-  reading order are; `BLOCK_CLASSES` is exported in `src/order.mjs`)
-- PDF input, the text layer, `parallel.py`, the viewer
-
-## Notes
-
-- **Standalone.** This directory is a self-contained repo root: the library
-  and the staged `hf-repo/` depend on nothing outside it (runtime deps come
-  from the CDN/npm; models are fetched from the Hub by `npm run download`).
-  Dev-only extras: `test:browser` uses `../assets/examples/*` of a
-  surrounding indra checkout when present (otherwise it smoke-tests a
-  synthetic page; pass your own images as arguments) and compares against the
-  Python CLI when `INDRA_OCR_BIN` points at an `indra-ocr` executable.
-- The Node runner (`ocr.mjs`/`compare.mjs`, `onnxruntime-node` + `sharp`) was
-  removed — this is browser-only now. The remaining Node scripts
-  (`download-models.mjs`, `space/build.mjs`, `web/serve.mjs`,
-  `web/prepare-repo.mjs`, `web/test-browser.mjs`) are dev tooling only.
-- HF `resolve` endpoints send `Access-Control-Allow-Origin: *`, so the models
-  (LFS/CDN redirects included) fetch fine from any page.
-- Without cross-origin isolation (COOP/COEP headers) ort-web runs the wasm
-  backend single-threaded. `web/serve.mjs` sets the headers; browsers only
-  honor them over HTTPS.
-- ~18 MB of models download on first load (`cjk: false` saves ~9.5 MB;
-  `orient: false`, `order: false` a bit more).
+Node >= 24 is required; the models, the optional native dependencies, and Puppeteer's Chrome download on first run.

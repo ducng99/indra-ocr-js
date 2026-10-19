@@ -1,4 +1,2 @@
 node_modules/
-models/
-hf-repo/
-space/
+test/models/
