@@ -15,6 +15,11 @@ export const MODEL_FILES = [
   "script.onnx",
   "rec_cjk.onnx",
   "orient.onnx",
+  "mathcls.onnx",
+  "math_enc.onnx",
+  "math_dec_init.onnx",
+  "math_dec_step.onnx",
+  "math_meta.json",
   "meta.json",
 ];
 

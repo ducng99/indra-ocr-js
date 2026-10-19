@@ -54,7 +54,14 @@ const testPage = (libUrl) => `<!doctype html><html><head>
   import { loadIndra, readGray } from ${JSON.stringify(libUrl)};
   let ocr = null, sig = null;
   window.__test = async (img, base, opts = {}) => {
-    const s = JSON.stringify([base, opts.cjk ?? true, opts.order ?? true, opts.orient ?? true]);
+    const s = JSON.stringify([
+      base,
+      opts.cjk ?? true,
+      opts.order ?? true,
+      opts.orient ?? true,
+      opts.math ?? false,
+      opts.tableHeads ?? false,
+    ]);
     if (sig !== s) {
       ocr = await loadIndra(base, opts);
       sig = s;
@@ -62,7 +69,14 @@ const testPage = (libUrl) => `<!doctype html><html><head>
     }
     const gray = await readGray(img);
     const page = await ocr.run(gray);
-    return { lines: page.lines, rotation: page.rotation, text: page.text, device: window.__device };
+    return {
+      lines: page.lines,
+      rotation: page.rotation,
+      skew: page.skew,
+      markdown: page.markdown,
+      text: page.text,
+      device: window.__device,
+    };
   };
 </script></head><body></body></html>`;
 
@@ -134,6 +148,18 @@ try {
     }
     console.log(report);
     console.log("  first lines:", JSON.stringify(jsLines.slice(0, 3)));
+    if (img === images[0]) {
+      // One extra pass with the math models and the table heads on: the
+      // markdown path must produce output in the browser too.
+      const r2 = await page.evaluate(
+        async (u, base) => await window.__test(u, base, { math: true, tableHeads: true }),
+        dataUrl, `http://127.0.0.1:${port}/test/models/`
+      );
+      const md = r2.markdown ?? "";
+      const ok = md.length > 0;
+      console.log(`  math+heads pass: markdown ${md.length} chars, "${md.split("\n")[0].slice(0, 60)}"`);
+      if (!ok) failed++;
+    }
   }
   await page.close();
   if (!images.length)

@@ -79,6 +79,69 @@ export function resizeGray(src, sw, sh, dw, dh, mode = "linear") {
   return out;
 }
 
+// cv2.getRotationMatrix2D: the 2x3 affine matrix (row-major, 6 numbers) that
+// rotates `angleDeg` degrees counter-clockwise about (cx, cy), scaled.
+export function rotMatrix2D(cx, cy, angleDeg, scale = 1) {
+  const a = (angleDeg * Math.PI) / 180;
+  const alpha = scale * Math.cos(a);
+  const beta = scale * Math.sin(a);
+  return [
+    alpha,
+    beta,
+    (1 - alpha) * cx - beta * cy,
+    -beta,
+    alpha,
+    beta * cx + (1 - alpha) * cy,
+  ];
+}
+
+// cv2.warpAffine with INTER_LINEAR: the output pixel at (x, y) samples the
+// source at the inverse of the forward matrix `m`, bilinearly, each tap border
+// -checked like cv2 ("constant" fills out-of-image taps with 0, cv2's default;
+// "replicate" clamps to the edge pixels).  Same output size as the input;
+// element type follows the source (Uint8Array or Float32Array).
+export function warpAffine(src, m, border = "constant") {
+  const { data, width: sw, height: sh } = src;
+  const dw = src.width;
+  const dh = src.height;
+  // invert [m0 m1 m2; m3 m4 m5]
+  const det = m[0] * m[4] - m[1] * m[3];
+  const i0 = m[4] / det;
+  const i1 = -m[1] / det;
+  const i2 = (m[1] * m[5] - m[2] * m[4]) / det;
+  const i3 = -m[3] / det;
+  const i4 = m[0] / det;
+  const i5 = (m[2] * m[3] - m[0] * m[5]) / det;
+  const rep = border === "replicate";
+  const px = (x, y) => {
+    if (rep) {
+      x = x < 0 ? 0 : x >= sw ? sw - 1 : x;
+      y = y < 0 ? 0 : y >= sh ? sh - 1 : y;
+    } else if (x < 0 || x >= sw || y < 0 || y >= sh) return 0;
+    return data[y * sw + x];
+  };
+  const out = new data.constructor(dw * dh);
+  for (let y = 0; y < dh; y++) {
+    const rx = i1 * y + i2;
+    const ry = i4 * y + i5;
+    const row = y * dw;
+    for (let x = 0; x < dw; x++) {
+      const sx = i0 * x + rx;
+      const sy = i3 * x + ry;
+      const ix = Math.floor(sx);
+      const iy = Math.floor(sy);
+      const fx = sx - ix;
+      const fy = sy - iy;
+      out[row + x] =
+        px(ix, iy) * (1 - fx) * (1 - fy) +
+        px(ix + 1, iy) * fx * (1 - fy) +
+        px(ix, iy + 1) * (1 - fx) * fy +
+        px(ix + 1, iy + 1) * fx * fy;
+    }
+  }
+  return { data: out, width: dw, height: dh };
+}
+
 // np.rot90(m, -k): the image turned k quarter-turns clockwise.
 export function rotQuarterCW(gray, k) {
   let { data, width: w, height: h } = gray;

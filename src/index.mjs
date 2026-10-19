@@ -9,10 +9,17 @@
 //
 // loadIndra(base, opts):
 //   base    where the model files live (det/rec/order/script/rec_cjk/orient
-//           .onnx + meta.json): a local directory, an HF ".../resolve/<rev>"
-//           URL, or a HF repo as "user/repo" (revision defaults to "main") or
-//           "user/repo@rev" to pin one
+//           .onnx + meta.json; + the math models with opts.math): a local
+//           directory, an HF ".../resolve/<rev>" URL, or a HF repo as
+//           "user/repo" (revision defaults to "main") or "user/repo@rev" to
+//           pin one
 //   opts.cjk / opts.order / opts.orient   skip those models (no load)
+//   opts.math             read math lines as LaTeX (loads the math models)
+//   opts.progress         callback for download progress: called with
+//                         {file, loaded, total} per chunk (total may be null)
+//                         and {file, loaded, total, done: true} per finished file
+//   opts.tableHeads       build tables from the order model's table heads
+//   opts.furniture        keep page headers and footers in the markdown
 //   opts.providers     onnxruntime execution providers (default ["cpu"])
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -32,8 +39,8 @@ async function fetchBuf(url) {
   return new Uint8Array(await readFile(url));
 }
 
-async function makeSession(base, name, providers) {
-  const buf = await fetchBuf(new URL(name, base));
+async function makeSession(base, name, providers, getBuf) {
+  const buf = await getBuf(name);
   const sess = await InferenceSession.create(buf, {
     executionProviders: providers,
     graphOptimizationLevel: "all",
@@ -65,10 +72,39 @@ function resolveBaseDir(base) {
 export async function loadIndra(base, opts = {}) {
   const providers = opts.providers ?? ["cpu"];
   const dir = resolveBaseDir(base);
+  const onProgress = typeof opts.progress === "function" ? opts.progress : null;
+
+  // Download cache: one in-flight promise per file, all candidates started
+  // concurrently.  Missing optional files reject inside the cache; the
+  // pipeline's try/catch around the optional sessions handles that.
+  const cache = new Map();
+  const get = (name) => {
+    if (!cache.has(name)) {
+      const buf = fetchBuf(new URL(name, dir), onProgress
+        ? (loaded, total) => onProgress({ file: name, loaded, total })
+        : null).then((b) => {
+          onProgress?.({ file: name, loaded: b.byteLength, total: b.byteLength, done: true });
+          return b;
+        });
+      cache.set(name, buf);
+    }
+    return cache.get(name);
+  };
+  const names = ["meta.json", "det.onnx", "rec.onnx"];
+  if (opts.order !== false) names.push("order.onnx");
+  if (opts.orient !== false) names.push("orient.onnx");
+  if (opts.cjk !== false) names.push("script.onnx", "rec_cjk.onnx");
+  if (opts.math) {
+    names.push("mathcls.onnx", "math_enc.onnx", "math_dec_init.onnx", "math_dec_step.onnx", "math_meta.json");
+  }
+  await Promise.allSettled(names.map(get));
+
+  const decode = async (name) => JSON.parse(new TextDecoder().decode(await get(name)));
   const backend = {
     Tensor,
-    meta: async () => JSON.parse(new TextDecoder().decode(await fetchBuf(new URL("meta.json", dir)))),
-    session: (name) => makeSession(dir, name, providers),
+    meta: () => decode("meta.json"),
+    json: decode,
+    session: (name) => makeSession(dir, name, providers, get),
   };
   const ocr = await IndraOCR.create(backend, opts);
   ocr.device = providers.join("+");

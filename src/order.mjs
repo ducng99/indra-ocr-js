@@ -100,9 +100,10 @@ export function decodeOrder(a, n, sweeps = 4) {
   return order;
 }
 
-// _cluster: average-linkage clustering of pairwise "same block" logits
-// (port of the vectorized numpy loop; n^2-ish work per page).
-function cluster(same, n) {
+// _cluster: average-linkage clustering of pairwise "same group" logits
+// (average-linkage over the same-block logits; see the Python docstring:
+// merge the two groups with the highest mean logit while it stays positive).
+export function cluster(same, n) {
   if (!n) return [];
   const M = new Float64Array(n * n);
   for (let i = 0; i < n * n; i++) M[i] = same[i];

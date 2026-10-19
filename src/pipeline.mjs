@@ -3,14 +3,23 @@
 // Tensor class come from an injected backend — src/index.mjs builds one on
 // onnxruntime-web (wasm).
 //
-// Not ported here (the models are optional in the Python package too):
-// orient.onnx's deskew step (estimate_skew), mask.onnx (not in this model
-// revision), the math models, and the markdown/block assembly.
+// Not ported here (the model is optional in the Python package and missing
+// from the current model revision): mask.onnx (CenterMask line masking).
 import { pageToInput, decodeBoxes } from "./det.mjs";
 import { cropLine, padBatch, widthBatches, PAD_X } from "./rec.mjs";
 import { lineFeatures, decodeBlocksOrder, decodeOrder, xyCut, BLOCK_CLASSES } from "./order.mjs";
+import { MATH_MIN_CONF, MathReader } from "./math.mjs";
+import { pageBlocks, pageMarkdown } from "./layout.mjs";
 import { Vocab } from "./vocab.mjs";
-import { clamp, median, resizeGray, rotQuarterCW, roundHalfEven } from "./imaging.mjs";
+import {
+  clamp,
+  median,
+  resizeGray,
+  rotQuarterCW,
+  rotMatrix2D,
+  roundHalfEven,
+  warpAffine,
+} from "./imaging.mjs";
 
 const ADAPTIVE_MIN_H = 9.0;
 const ADAPTIVE_TARGET_H = 12.0;
@@ -19,20 +28,29 @@ const ORIENT_SIDE = 768;
 const ORIENT_MIN = 0.95;
 const MIN_CONF = 0.5;
 const SPLIT_GAP = 3.0;
+const CELL_GAP = 1.8; // cut a table line into cells at a wider gap (label rule in tables)
 const GUTTER_GAP = 1.6;
 const GUTTER_EDGES = 3;
+const DESKEW_MAX = 5.0; // degrees of tilt searched
+const DESKEW_MIN = 0.3; // smaller tilts are left alone (the search step is 0.1)
 
 const round1 = (v) => Math.round(v * 10) / 10;
 const round4 = (v) => Math.round(v * 1e4) / 1e4;
 
 export class IndraOCR {
   /** Build the pipeline on a backend: { Tensor, meta: async () => object,
-   *  session: async (name) => { run } }.  opts.{order, orient, cjk} turn off
-   *  the optional models (a missing file is also fine); opts.adaptive toggles
-   *  the second, higher-resolution detection pass. */
+   *  json: async (name) => object, session: async (name) => { run } }.
+   *  opts.{order, orient, cjk} turn off the optional models (a missing file is
+   *  also fine); opts.adaptive toggles the second, higher-resolution detection
+   *  pass; opts.math opts in to reading math lines as LaTeX (needs the math
+   *  models in the model folder); opts.tableHeads builds tables from the order
+   *  model's row / column / cell heads instead of from geometry; opts.furniture
+   *  keeps page headers and footers in the markdown. */
   static async create(backend, opts = {}) {
     const o = new IndraOCR();
     o.Tensor = backend.Tensor;
+    o.tableHeads = opts.tableHeads ?? false;
+    o.furniture = opts.furniture ?? false;
     const meta = await backend.meta();
     o.vocab = Vocab.fromMeta(meta.vocab);
     o.longSide = meta.det_long_side;
@@ -64,6 +82,12 @@ export class IndraOCR {
       } catch {
         /* Latin-only model folder */
       }
+    }
+    // Math: a line classifier routes lines with math to a MathReader (math.mjs).
+    o.math = null;
+    if (opts.math) {
+      if (backend.json) o.math = await MathReader.load(backend);
+      if (!o.math) throw new Error(`math: true needs the math models (mathcls.onnx, math_enc.onnx, math_dec_init.onnx, math_dec_step.onnx, math_meta.json)`);
     }
     o.adaptive = opts.adaptive ?? true;
     return o;
@@ -160,10 +184,32 @@ export class IndraOCR {
         });
       }
     }
+    if (this.math && crops.length) {
+      const flags = await this.math.flags(crops);
+      const mathIdx = flags.flatMap((f, j) => (f ? [j] : []));
+      if (mathIdx.length) {
+        const reads = await this.math.read(
+          gray,
+          mathIdx.map((j) => boxes[j])
+        );
+        // Only a confident reading with math replaces the line (one token
+        // holds the whole line: it is never split).
+        mathIdx.forEach((j, k) => {
+          const { text, conf } = reads[k];
+          if (text.includes("$") && conf >= MATH_MIN_CONF) {
+            const xc = (boxes[j][0] + boxes[j][2]) / 2;
+            out[j] = { text, conf: 1.0, toks: [[text, xc]] };
+          }
+        });
+      }
+    }
     return out;
   }
 
-  /** Reading order of the (split) lines with order.onnx. */
+  /** Reading order of the (split) lines with order.onnx: {order, layout},
+   *  where layout = {cls, same, tab, classes} when the model has the layout
+   *  heads (cls [n, C] block logits, same [n, n] same-block logits, tab
+   *  [3, n, n] same-row / -column / -cell logits when tableHeads is on). */
   async readingOrder(boxes, texts, wh) {
     if (boxes.length < 2 || !this.order) {
       return { order: boxes.length ? xyCut(boxes) : [], layout: null };
@@ -181,7 +227,12 @@ export class IndraOCR {
       // geometry, blocks by the order head.
       return {
         order: decodeBlocksOrder(a, outs.same.data, boxes, cls),
-        layout: { cls, same: outs.same.data, classes: BLOCK_CLASSES },
+        layout: {
+          cls,
+          same: outs.same.data,
+          tab: this.tableHeads && outs.tab ? outs.tab.data : null,
+          classes: BLOCK_CLASSES,
+        },
       };
     }
     return { order: decodeOrder(a, n), layout: null };
@@ -261,8 +312,9 @@ export class IndraOCR {
     return out;
   }
 
-  /** Lines -> split at wide gaps -> reading order. */
-  async #assemble(wh, boxes, rec) {
+  /** Lines -> split at wide gaps -> reading order -> blocks + markdown. */
+  async #assemble(wh, boxes, rec, t) {
+    const t0 = Date.now();
     const cuts = this.#gutterCuts(boxes, rec);
     let nb = [];
     let nrec = [];
@@ -273,12 +325,141 @@ export class IndraOCR {
       }
     });
     const texts = nrec.map((r) => r.text);
-    const { order } = await this.readingOrder(nb, texts, wh);
-    return order.map((i) => ({
+    const { order, layout } = await this.readingOrder(nb, texts, wh);
+    if (layout && layout.tab) {
+      // The table heads learned one line per cell, but the detector can join
+      // cells: split table lines into cells, then run the order model again.
+      const tableCls = BLOCK_CLASSES.indexOf("Table");
+      const isTable = nb.map((_, i) => {
+        let am = 0;
+        for (let c = 1; c < BLOCK_CLASSES.length; c++)
+          if (layout.cls[i * BLOCK_CLASSES.length + c] > layout.cls[i * BLOCK_CLASSES.length + am]) am = c;
+        return am === tableCls;
+      });
+      if (isTable.some(Boolean)) {
+        const b2 = [];
+        const r2 = [];
+        nb.forEach((b, i) => {
+          const parts = isTable[i]
+            ? this.#splitLine(b, nrec[i].toks, CELL_GAP)
+            : [[b, nrec[i].text, nrec[i].toks]];
+          for (const [bx, tx, tk] of parts) {
+            b2.push(bx);
+            r2.push({ text: tx, conf: nrec[i].conf, toks: tk });
+          }
+        });
+        if (b2.length !== nb.length) {
+          nb = b2;
+          nrec = r2;
+          const texts2 = nrec.map((r) => r.text);
+          ({ order, layout } = await this.readingOrder(nb, texts2, wh));
+          texts.length = 0;
+          texts.push(...texts2);
+        }
+      }
+    }
+    t.orderMs = Date.now() - t0;
+    const lines = order.map((i) => ({
       box: nb[i].slice(0, 4).map(round1),
       text: nrec[i].text,
       conf: round4(nrec[i].conf),
     }));
+    let md = null;
+    let blocks = [];
+    if (layout) {
+      blocks = pageBlocks(nb, texts, order, layout.cls, layout.same);
+      // Inside tables, labels split cells at smaller gaps (CELL_GAP).
+      const cellsMap = new Map(
+        nb.map((b, i) => [
+          i,
+          this.#splitLine(b, nrec[i].toks, CELL_GAP).map(([bx, tx]) => [bx, tx]),
+        ])
+      );
+      md = pageMarkdown(nb, texts, order, layout.cls, layout.same, {
+        keepFurniture: this.furniture,
+        cells: cellsMap,
+        tab: layout.tab,
+      });
+    } else if (nb.length < 2) md = texts.join("\n");
+    return { lines, md, blocks };
+  }
+
+  /** Degrees (counter-clockwise) that straighten the text rows of a page: the
+   *  angle whose horizontal ink profile changes most sharply row to row, on a
+   *  page thumbnail, searched in 0.5 degree steps and then 0.1 degree steps. */
+  #estimateSkew(gray, side = 800) {
+    const { width: w, height: h } = gray;
+    const s = side / Math.max(h, w);
+    const nw = Math.max(1, roundHalfEven(w * s));
+    const nh = Math.max(1, roundHalfEven(h * s));
+    const small = resizeGray(gray.data, w, h, nw, nh, "area");
+    const ink = new Float32Array(nw * nh);
+    let sum = 0;
+    for (let i = 0; i < ink.length; i++) {
+      ink[i] = (255 - small[i]) / 255;
+      sum += ink[i];
+    }
+    if (sum / ink.length < 0.003) return 0; // a blank page has no rows to straighten
+    const sharpness = (a) => {
+      const r = warpAffine({ data: ink, width: nw, height: nh }, rotMatrix2D(nw / 2, nh / 2, a));
+      let sh = 0;
+      for (let y = 1; y < nh; y++) {
+        let d = 0;
+        for (let x = 0; x < nw; x++) d += r.data[y * nw + x] - r.data[(y - 1) * nw + x];
+        sh += d * d;
+      }
+      return sh;
+    };
+    let best = 0;
+    let bestV = -Infinity;
+    for (let a = -DESKEW_MAX; a <= DESKEW_MAX + 1e-6; a += 0.5) {
+      const v = sharpness(a);
+      if (v > bestV) {
+        bestV = v;
+        best = a;
+      }
+    }
+    bestV = -Infinity;
+    for (let a = best - 0.5; a <= best + 0.5 + 1e-6; a += 0.1) {
+      const v = sharpness(a);
+      if (v > bestV) {
+        bestV = v;
+        best = a;
+      }
+    }
+    return best;
+  }
+
+  /** The page rotated by `degrees` counter-clockwise about its centre (same size). */
+  #rotatePage(gray, degrees) {
+    return warpAffine(gray, rotMatrix2D(gray.width / 2, gray.height / 2, degrees), "replicate");
+  }
+
+  /** A box of the page that #rotatePage(.., degrees) made, mapped back to the
+   *  page before it: the bounding box of the four mapped corners, clipped. */
+  #unrotateBox(box, degrees, w, h) {
+    const m = rotMatrix2D(w / 2, h / 2, -degrees);
+    const xs = [box[0], box[2], box[0], box[2]];
+    const ys = [box[1], box[1], box[3], box[3]];
+    const cx = xs.map((x, i) => m[0] * x + m[1] * ys[i] + m[2]);
+    const cy = ys.map((y, i) => m[3] * xs[i] + m[4] * y + m[5]);
+    return [
+      round1(clamp(Math.min(...cx), 0, w)),
+      round1(clamp(Math.min(...cy), 0, h)),
+      round1(clamp(Math.max(...cx), 0, w)),
+      round1(clamp(Math.max(...cy), 0, h)),
+    ];
+  }
+
+  /** The page turned upright (orient.onnx) and straightened (estimateSkew):
+   *  {gray, turns, skew} — turns of quarter-turns undone, degrees of skew undone. */
+  async #upright(gray, turn = true) {
+    const k = turn ? await this.orientation(gray) : 0;
+    if (k) gray = rotQuarterCW(gray, k);
+    let a = this.#estimateSkew(gray);
+    if (Math.abs(a) >= DESKEW_MIN) gray = this.#rotatePage(gray, a);
+    else a = 0;
+    return { gray, turns: k, skew: a };
   }
 
   /** Quarter turns (counter-clockwise) the page content is turned by. */
@@ -304,13 +485,36 @@ export class IndraOCR {
   }
 
   /** OCR of a page image ({data: Uint8Array, width, height}, grayscale):
-   *  {lines: [{box, text, conf}] in reading order, rotation, text}. */
+   *  {lines: [{box, text, conf}] in reading order, rotation, skew, markdown,
+   *  blocks, text}.  turn=false: the page is known to be upright (skips the
+   *  orientation and deskew passes). */
   async run(gray, turn = true) {
-    const k = turn ? await this.orientation(gray) : 0;
-    if (k) gray = rotQuarterCW(gray, k);
+    const t = {};
+    let t0 = Date.now();
+    const up = await this.#upright(gray, turn);
+    gray = up.gray;
+    t.orientMs = Date.now() - t0;
+    t0 = Date.now();
     const boxes = await this.detect(gray);
+    t.detMs = Date.now() - t0;
+    t0 = Date.now();
     const rec = await this.recognize(gray, boxes);
-    const lines = await this.#assemble([gray.width, gray.height], boxes, rec);
-    return { lines, rotation: 90 * k, text: lines.map((l) => l.text).join("\n") };
+    t.recMs = Date.now() - t0;
+    const { lines, md, blocks } = await this.#assemble([gray.width, gray.height], boxes, rec, t);
+    const skew = round1(up.skew);
+    if (up.skew) {
+      // boxes back on the page as turned, before the deskew
+      for (const ln of lines) ln.box = this.#unrotateBox(ln.box, up.skew, gray.width, gray.height);
+      for (const b of blocks) b.bbox = this.#unrotateBox(b.bbox, up.skew, gray.width, gray.height);
+    }
+    return {
+      lines,
+      rotation: 90 * up.turns,
+      skew,
+      markdown: md,
+      blocks,
+      text: lines.map((l) => l.text).join("\n"),
+      timings: t,
+    };
   }
 }
