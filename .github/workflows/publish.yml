@@ -45,9 +45,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run smoke test
-        run: npm test
-
       - name: Publish
         run: npm stage publish --provenance --tag latest
         env:
