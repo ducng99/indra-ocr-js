@@ -343,6 +343,7 @@ function hover(i, on) {
 function renderResults() {
   const page = state.page;
   ui.overlay.replaceChildren();
+  ui.lines.replaceChildren();
   page.lines.forEach((l, i) => {
     const [x0, y0, x1, y1] = l.box;
     const b = document.createElement("div");
