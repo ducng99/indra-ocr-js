@@ -27,6 +27,7 @@ const MIME = {
 // --- models: fetch the pinned revision once, keep it out of git ---
 await ensureModels();
 
+const notFound = new Set(); // optional model files the loader skips by design
 const server = createServer(async (req, res) => {
   try {
     const p = path.normalize(path.join(root, decodeURIComponent(new URL(req.url, "http://x").pathname)));
@@ -39,7 +40,11 @@ const server = createServer(async (req, res) => {
     });
     res.end(data);
   } catch {
-    res.writeHead(404).end();
+    notFound.add(decodeURIComponent(new URL(req.url, "http://x").pathname));
+    res.writeHead(404, {
+      // as above: the host page is about:blank, so even its 404s need CORS
+      "access-control-allow-origin": "*",
+    }).end();
   }
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
@@ -82,9 +87,15 @@ const testPage = (libUrl) => `<!doctype html><html><head>
 
 async function openTestPage(browser, libUrl) {
   const page = await browser.newPage();
-  page.on("console", (m) => m.type() === "error" && !m.text().includes("favicon") && console.error("[page error]", m.text()));
+  // A 404 the server itself produced is an optional model file the loader
+  // skips by design (lm_<group>.npz when a group has none) — informational.
+  page.on("console", (m) => m.type() === "error" && !m.text().includes("favicon") && !(notFound.size && m.text().includes("Failed to load resource")) && console.error("[page error]", m.text()));
   page.on("pageerror", (e) => console.error("[pageerror]", e.message));
-  page.on("requestfailed", (r) => console.error("[request failed]", r.url(), r.failure()?.errorText));
+  page.on("requestfailed", (r) => {
+    const u = new URL(r.url(), "http://x").pathname;
+    if (notFound.has(u)) return console.error("[optional model 404]", u);
+    console.error("[request failed]", r.url(), r.failure()?.errorText);
+  });
   await page.setContent(testPage(libUrl), { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => typeof window.__test === "function", { timeout: 30000 });
   return page;

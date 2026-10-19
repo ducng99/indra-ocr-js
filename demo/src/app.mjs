@@ -57,7 +57,7 @@ function onProgress(p) {
 }
 
 async function getOcr() {
-  const base = ui.models.value.trim() || "datalab-to/indra-ocr@v3.1.1";
+  const base = ui.models.value.trim() || "datalab-to/indra-ocr@v1.1.0";
   const opts = { cjk: ui.cjk.checked, orient: ui.orient.checked };
   const next = JSON.stringify([base, opts.cjk, opts.orient]);
   if (ocr && sig === next) return ocr;
@@ -124,7 +124,7 @@ function drawArticle({ flip = false } = {}) {
     "all run locally on WebAssembly, via ONNX Runtime.",
     "Your pixels stay put — only the model weights travel,",
     "about 18 MB, once, and then the browser caches them.",
-    "Filed under on-device intelligence · revision v3.1.1",
+    "Filed under on-device intelligence",
   ].forEach((t, i) => x.fillText(t, 64, 180 + i * 54));
   if (!flip) return x.canvas;
   const r = paper(w, h);

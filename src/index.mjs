@@ -8,13 +8,17 @@
 //   const page = await ocr.run(await readGray("page.png"));
 //
 // loadIndra(base, opts):
-//   base    where the model files live (det/rec/order/script/rec_cjk/orient
-//           .onnx + meta.json; + the math models with opts.math): a local
-//           directory, an HF ".../resolve/<rev>" URL, or a HF repo as
-//           "user/repo" (revision defaults to "main") or "user/repo@rev" to
-//           pin one
-//   opts.cjk / opts.order / opts.orient   skip those models (no load)
+//   base    where the model files live (det/rec/order/orient/script/rec_<group>
+//           .onnx + meta.json; + the math models with opts.math; + the n-gram
+//           language models lm*.npz): a local directory, an HF
+//           ".../resolve/<rev>" URL, or a HF repo as "user/repo" (revision
+//           defaults to the release the models were exported at) or
+//           "user/repo@rev" to pin one
+//   opts.cjk / opts.order / opts.orient / opts.lm   skip those models (no load);
+//           cjk covers the script classifier and the group recognizers
 //   opts.math             read math lines as LaTeX (loads the math models)
+//   opts.recInt8          load rec.int8.onnx instead of rec.onnx
+//   opts.threads          onnxruntime intra-op threads (default 4)
 //   opts.progress         callback for download progress: called with
 //                         {file, loaded, total} per chunk (total may be null)
 //                         and {file, loaded, total, done: true} per finished file
@@ -28,6 +32,10 @@ import { InferenceSession, Tensor } from "onnxruntime-node";
 import sharp from "sharp";
 import { IndraOCR } from "./pipeline.mjs";
 
+// The release tag the published model files were exported at (py models.py
+// HF_REVISION): the default revision of the "user/repo" shorthand.
+const HF_REVISION = "v1.1.0";
+
 export { IndraOCR };
 
 async function fetchBuf(url) {
@@ -39,13 +47,22 @@ async function fetchBuf(url) {
   return new Uint8Array(await readFile(url));
 }
 
-async function makeSession(base, name, providers, getBuf) {
+async function makeSession(base, name, providers, getBuf, threads) {
   const buf = await getBuf(name);
   const sess = await InferenceSession.create(buf, {
     executionProviders: providers,
     graphOptimizationLevel: "all",
+    intraOpNumThreads: threads,
+    interOpNumThreads: 1,
+    // No CPU memory arena: with line batches of changing shape it kept
+    // growing, and it bought no measurable speed (see pipeline.py).
+    enableCpuMemArena: false,
   });
-  return { run: (inputs) => sess.run(inputs) };
+  return {
+    run: (inputs) => sess.run(inputs),
+    inputNames: sess.inputNames,
+    outputNames: sess.outputNames,
+  };
 }
 
 // "user/repo" or "user/repo@rev" → the HF resolve URL for the repo.  Anything
@@ -54,7 +71,7 @@ async function makeSession(base, name, providers, getBuf) {
 function resolveHf(base) {
   const m = /^([^/@:\s]+)\/([^/@:\s]+)(?:@(.+))?$/.exec(base);
   return m
-    ? `https://huggingface.co/${m[1]}/${m[2]}/resolve/${m[3] || "main"}`
+    ? `https://huggingface.co/${m[1]}/${m[2]}/resolve/${m[3] || HF_REVISION}`
     : base;
 }
 
@@ -71,6 +88,7 @@ function resolveBaseDir(base) {
 
 export async function loadIndra(base, opts = {}) {
   const providers = opts.providers ?? ["cpu"];
+  const threads = opts.threads ?? 4;
   const dir = resolveBaseDir(base);
   const onProgress = typeof opts.progress === "function" ? opts.progress : null;
 
@@ -90,21 +108,40 @@ export async function loadIndra(base, opts = {}) {
     }
     return cache.get(name);
   };
-  const names = ["meta.json", "det.onnx", "rec.onnx"];
+  const names = ["meta.json", "det.onnx", opts.recInt8 ? "rec.int8.onnx" : "rec.onnx"];
   if (opts.order !== false) names.push("order.onnx");
   if (opts.orient !== false) names.push("orient.onnx");
-  if (opts.cjk !== false) names.push("script.onnx", "rec_cjk.onnx");
   if (opts.math) {
     names.push("mathcls.onnx", "math_enc.onnx", "math_dec_init.onnx", "math_dec_step.onnx", "math_meta.json");
   }
   await Promise.allSettled(names.map(get));
 
+  // meta.json names the recognizer groups (script.onnx's classes): the group
+  // recognizers rec_<g>.onnx and the language models lm*.npz follow from it.
   const decode = async (name) => JSON.parse(new TextDecoder().decode(await get(name)));
+  let meta = null;
+  try {
+    meta = await decode("meta.json");
+  } catch {
+    /* IndraOCR.create will surface the missing meta.json */
+  }
+  const groups = (meta?.script_groups ?? ["base", "cjk", "rtl", "other"]).filter((g) => g !== "base");
+  const more = [];
+  if (opts.cjk !== false) more.push("script.onnx", ...groups.map((g) => `rec_${g}.onnx`));
+  // The language models ship per group (lm.npz for the base recognizer,
+  // lm_<group>.npz when a group has one).
+  if (opts.lm !== false) {
+    more.push("lm.npz");
+    if (opts.cjk !== false) more.push(...groups.map((g) => `lm_${g}.npz`));
+  }
+  await Promise.allSettled(more.map(get));
+
   const backend = {
     Tensor,
     meta: () => decode("meta.json"),
     json: decode,
-    session: (name) => makeSession(dir, name, providers, get),
+    bytes: async (name) => new Uint8Array(await get(name)),
+    session: (name) => makeSession(dir, name, providers, get, threads),
   };
   const ocr = await IndraOCR.create(backend, opts);
   ocr.device = providers.join("+");
@@ -120,7 +157,7 @@ export async function readGray(source) {
   const out = new Uint8Array(width * height);
   for (let i = 0, p = 0; i < out.length; i++, p += channels) {
     out[i] = channels >= 3
-      ? Math.round(0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2])
+      ? (data[p] * 9797 + data[p + 1] * 19234 + data[p + 2] * 3737) >> 15
       : data[p];
   }
   return { data: out, width, height };

@@ -1,10 +1,12 @@
 // CTC vocabulary (class 0 = blank), from meta.json.  Port of indra_ocr/vocab.py
-// decode(): a LaTeX command token ("\frac") gets a space before a following letter.
+// decode(): a LaTeX command token ("\frac") gets a space before a following
+// letter; Hangul jamo compose back into syllables.
 export class Vocab {
   constructor(chars) {
     this.chars = chars;
     this.index = new Map(chars.map((c, i) => [c, i + 1]));
     this.hasCommands = chars.some((c) => c.length > 1);
+    this.jamo = this.index.has("ᄀ"); // Hangul syllables read as jamo
   }
 
   static fromMeta(obj) {
@@ -16,6 +18,7 @@ export class Vocab {
   decode(ids) {
     const toks = [];
     for (const i of ids) if (i > 0 && i <= this.chars.length) toks.push(this.chars[i - 1]);
+    if (this.jamo) return toks.join("").normalize("NFC"); // compose the jamo back into syllables
     if (!this.hasCommands) return toks.join("");
     let out = "";
     for (let k = 0; k < toks.length; k++) {
@@ -25,8 +28,8 @@ export class Vocab {
       if (
         t.length > 2 &&
         t[0] === "\\" &&
-        /^[A-Za-z]+$/.test(t.slice(1)) &&
-        /^[A-Za-z]/.test(nxt)
+        /^\p{L}+$/u.test(t.slice(1)) &&
+        /^\p{L}/u.test(nxt)
       )
         out += " ";
     }

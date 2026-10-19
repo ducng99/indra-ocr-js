@@ -7,14 +7,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const models = fileURLToPath(new URL("./models/", import.meta.url));
-export const MODEL_BASE = "https://huggingface.co/datalab-to/indra-ocr/resolve/v3.1.1";
+export const MODEL_BASE = "https://huggingface.co/datalab-to/indra-ocr/resolve/v1.1.0";
 export const MODEL_FILES = [
   "det.onnx",
   "rec.onnx",
   "order.onnx",
   "script.onnx",
   "rec_cjk.onnx",
+  "rec_rtl.onnx",
+  "rec_world.onnx",
   "orient.onnx",
+  "lm.npz",
+  "lm_cjk.npz",
+  "lm_world.npz",
   "mathcls.onnx",
   "math_enc.onnx",
   "math_dec_init.onnx",

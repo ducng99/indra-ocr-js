@@ -13,7 +13,7 @@
 //                         centre, columns anchored on the fullest rows)
 //   Page-Header / Footer  left out unless `keepFurniture`
 import { BLOCK_CLASSES, cluster } from "./order.mjs";
-import { median } from "./imaging.mjs";
+import { median, roundHalfEven } from "./imaging.mjs";
 
 const HEADER = BLOCK_CLASSES.indexOf("Page-Header");
 const FOOTER = BLOCK_CLASSES.indexOf("Page-Footer");
@@ -21,51 +21,13 @@ const SECTION = BLOCK_CLASSES.indexOf("Section-Header");
 const LIST = BLOCK_CLASSES.indexOf("List-Group");
 const TABLE = BLOCK_CLASSES.indexOf("Table");
 
-const WHOLE_MATH = /^\$[^$\n]+\$$/; // a line that is one formula
+const WHOLE_MATH = /^\$[^$]+\$$/; // a line that is one formula
 // A list marker, followed by text or alone on its line (the detector often cuts
 // a bullet off as a line of its own; the next line then joins its item).
 const ITEM = /^\s*([•\-–▪◦*·→]|\(?\d{1,3}[.)]|\(?[a-zA-Z][.)])(\s|$)/;
-const PLAIN_WORD = / [A-Za-z]{3,}\b(?![_^{(])/y; // sticky: matched at position i
 
-const round1 = (v) => Math.round(v * 10) / 10;
+const round1 = (v) => roundHalfEven(v * 10) / 10;
 const escapeHtml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-// Close $ math spans the recognizer left open.
-//
-// Left to right: a $ opens math only when LaTeX (\\ _ ^ {) or a closing $
-// follows within 15 characters, so prices ("$5 per item") stay text.  Inside
-// math, a following plain word of 3+ letters closes the span; an open span
-// closes at the end of the line.
-export function balanceMath(text) {
-  if (!text.includes("$")) return text;
-  const out = [];
-  let inMath = false;
-  let i = 0;
-  while (i < text.length) {
-    const c = text[i];
-    if (c === "$") {
-      if (inMath) inMath = false;
-      else {
-        const ahead = text.slice(i + 1, i + 16);
-        inMath = /[\\_^{]/.test(ahead) || ahead.includes("$");
-      }
-      out.push(c);
-      i++;
-      continue;
-    }
-    if (inMath && c === " ") {
-      PLAIN_WORD.lastIndex = i;
-      if (PLAIN_WORD.test(text)) {
-        out.push("$");
-        inMath = false;
-      }
-    }
-    out.push(c);
-    i++;
-  }
-  if (inMath) out.push("$");
-  return out.join("");
-}
 
 // Han, kana, CJK punctuation and fullwidth forms: written without spaces
 // (Korean Hangul is not: Korean separates words with spaces).
@@ -394,37 +356,66 @@ export function pageBlocks(boxes, texts, order, cls, same) {
 // reading order, cls [n, C] block logits, same [n, n] "same block" logits.
 // `cells` maps a line index to its table cells [(box, text)] when the line
 // holds several; `tab` [3, n, n] (same row / column / cell logits) builds
-// tables from the heads.
+// tables from the heads.  `pictures` [P, 4]: picture regions, each written as
+// `![](picture-<k>)` before the first block below it that it overlaps
+// horizontally.
 export function pageMarkdown(boxes, texts, order, cls, same, opts = {}) {
-  const { keepFurniture = false, cells = null, tab = null } = opts;
+  const { keepFurniture = false, cells = null, tab = null, pictures = null } = opts;
   const n = boxes.length;
   const parts = [];
+  const partBoxes = [];
   for (const blk of splitBlocks(order, same, n)) {
-    const c = blockCls(cls, blk, n);
-    const textsB = blk.map((i) => texts[i]); // balance_math measured worse on olmOCR arxiv_math
-    if ((c === HEADER || c === FOOTER) && !keepFurniture) continue;
-    if (textsB.every((t) => WHOLE_MATH.test(t.trim()))) {
-      // display equations
-      parts.push(textsB.map((t) => "$$" + t.trim().slice(1, -1) + "$$").join("\n"));
-      continue;
+    const nParts = parts.length;
+    blockPart(parts, blk, boxes, texts, cls, keepFurniture, cells, tab, n);
+    if (parts.length > nParts) {
+      const b = blk.map((i) => boxes[i]);
+      partBoxes.push([
+        Math.min(...b.map((x) => x[0])),
+        Math.min(...b.map((x) => x[1])),
+        Math.max(...b.map((x) => x[2])),
+        Math.max(...b.map((x) => x[3])),
+      ]);
     }
-    if (c === SECTION) parts.push("## " + joinLines(textsB));
-    else if (c === TABLE && blk.length > 1 && tab) {
-      const bBoxes = blk.map((i) => boxes[i]);
-      const tSub = subTab(tab, blk);
-      if (headsPlausible(bBoxes, tSub, blk.length))
-        parts.push(tableHtmlHeads(bBoxes, textsB, tSub, blk.length));
-      else {
-        const cb = [];
-        const ct = [];
-        for (const i of blk)
-          for (const [bx, tx] of cells?.get(i) || [[boxes[i], texts[i]]]) {
-            cb.push(bx);
-            ct.push(tx);
-          }
-        parts.push(tableHtml(cb, ct));
-      }
-    } else if (c === TABLE && blk.length > 1) {
+  }
+  if (pictures && pictures.length) {
+    const slots = new Map();
+    pictures.forEach(([x0, y0, x1, y1], k) => {
+      const cy = (y0 + y1) / 2;
+      const at = partBoxes.findIndex(
+        ([bx0, by0, bx1, by1]) => (by0 + by1) / 2 > cy && Math.min(x1, bx1) > Math.max(x0, bx0)
+      );
+      const j = at === -1 ? parts.length : at;
+      if (!slots.has(j)) slots.set(j, []);
+      slots.get(j).push(`![](picture-${k})`);
+    });
+    const merged = [];
+    for (let j = 0; j <= parts.length; j++) {
+      merged.push(...(slots.get(j) ?? []));
+      if (j < parts.length) merged.push(parts[j]);
+    }
+    parts.length = 0;
+    parts.push(...merged);
+  }
+  return parts.filter(Boolean).join("\n\n");
+}
+
+// Append one block's markdown to `parts` (nothing for dropped furniture).
+function blockPart(parts, blk, boxes, texts, cls, keepFurniture, cells, tab, n) {
+  const c = blockCls(cls, blk, n);
+  const textsB = blk.map((i) => texts[i]);
+  if ((c === HEADER || c === FOOTER) && !keepFurniture) return;
+  if (textsB.every((t) => WHOLE_MATH.test(t.trim()))) {
+    // display equations
+    parts.push(textsB.map((t) => "$$" + t.trim().slice(1, -1) + "$$").join("\n"));
+    return;
+  }
+  if (c === SECTION) parts.push("## " + joinLines(textsB));
+  else if (c === TABLE && blk.length > 1 && tab) {
+    const bBoxes = blk.map((i) => boxes[i]);
+    const tSub = subTab(tab, blk);
+    if (headsPlausible(bBoxes, tSub, blk.length))
+      parts.push(tableHtmlHeads(bBoxes, textsB, tSub, blk.length));
+    else {
       const cb = [];
       const ct = [];
       for (const i of blk)
@@ -433,14 +424,22 @@ export function pageMarkdown(boxes, texts, order, cls, same, opts = {}) {
           ct.push(tx);
         }
       parts.push(tableHtml(cb, ct));
-    } else if (c === LIST) {
-      const items = [];
-      for (const t of textsB) {
-        if (!items.length || ITEM.test(t)) items.push([t]);
-        else items[items.length - 1].push(t);
+    }
+  } else if (c === TABLE && blk.length > 1) {
+    const cb = [];
+    const ct = [];
+    for (const i of blk)
+      for (const [bx, tx] of cells?.get(i) || [[boxes[i], texts[i]]]) {
+        cb.push(bx);
+        ct.push(tx);
       }
-      parts.push(items.map(joinLines).join("\n"));
-    } else parts.push(joinLines(textsB));
-  }
-  return parts.filter(Boolean).join("\n\n");
+    parts.push(tableHtml(cb, ct));
+  } else if (c === LIST) {
+    const items = [];
+    for (const t of textsB) {
+      if (!items.length || ITEM.test(t)) items.push([t]);
+      else items[items.length - 1].push(t);
+    }
+    parts.push(items.map(joinLines).join("\n"));
+  } else parts.push(joinLines(textsB));
 }

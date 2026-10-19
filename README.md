@@ -17,7 +17,7 @@ Node — `import "@ducng99/indra-ocr-js"`; browser — `import "@ducng99/indra-o
 ```js
 import { loadIndra, readGray } from "@ducng99/indra-ocr-js";
 
-const ocr = await loadIndra("datalab-to/indra-ocr@v3.1.1"); // HF repo, URL or local dir
+const ocr = await loadIndra("datalab-to/indra-ocr"); // HF repo, URL or local dir
 const page = await ocr.run(await readGray("page.png"));
 
 page.text;      // every line, in reading order
@@ -50,7 +50,7 @@ First run downloads the pinned models into `test/models/` and puppeteer's Chrome
 
 ## Porting
 
-A 1:1 port of the Python `indra-ocr` package (`det.mjs` ← `det_post.py`, `rec.mjs` ← `rec_preproc.py`, `order.mjs` ← `order_post.py`, `math.mjs` ← `math.py`, `layout.mjs` ← `layout_post.py`, `vocab.mjs` ← `vocab.py`, `pipeline.mjs` ← `pipeline.py`, `imaging.mjs` ← cv2), down to half-even rounding, cv2's resize taps and Rec.601 luma, so model inputs stay numerically identical.
+A 1:1 port of the Python `indra-ocr` package (`det.mjs` ← `det_post.py`, `rec.mjs` ← `rec_preproc.py` + `line_mask.py`, `order.mjs` ← `order_post.py`, `math.mjs` ← `math.py`, `layout.mjs` ← `layout_post.py`, `vocab.mjs` ← `vocab.py`, `rtl.mjs` ← `rtl.py` with `unicode.mjs` ← Python's `unicodedata`, `lm.mjs` ← `lm.py`, `pipeline.mjs` ← `pipeline.py`, `imaging.mjs` ← cv2), down to half-even rounding, cv2's resize taps and grayscale conversion, so model inputs stay numerically identical.
 
 [`demo/`](demo/) is a client-side playground (`bun run build`), deployed to GitHub Pages and a HF Space by the **Deploy demo** workflow.
 

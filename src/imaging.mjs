@@ -33,7 +33,10 @@ function taps(srcN, dstN, mode) {
       const x0 = d * inv;
       const x1 = (d + 1) * inv;
       const t = [];
-      for (let i = Math.floor(x0); i < Math.ceil(x1); i++) {
+      // cv2 only taps valid source rows: (d + 1) * inv can round one past the
+      // end (963/800 x 800: 963.0000000000001), which would read out of bounds.
+      const hi = Math.min(Math.ceil(x1), srcN);
+      for (let i = Math.max(0, Math.floor(x0)); i < hi; i++) {
         const w = (Math.min(x1, i + 1) - Math.max(x0, i)) / inv; // normalized
         if (w > 0) t.push([i, w]);
       }
@@ -121,6 +124,7 @@ export function warpAffine(src, m, border = "constant") {
     return data[y * sw + x];
   };
   const out = new data.constructor(dw * dh);
+  const isByte = out instanceof Uint8Array; // cv2 rounds uint8 output
   for (let y = 0; y < dh; y++) {
     const rx = i1 * y + i2;
     const ry = i4 * y + i5;
@@ -132,11 +136,12 @@ export function warpAffine(src, m, border = "constant") {
       const iy = Math.floor(sy);
       const fx = sx - ix;
       const fy = sy - iy;
-      out[row + x] =
+      const v =
         px(ix, iy) * (1 - fx) * (1 - fy) +
         px(ix + 1, iy) * fx * (1 - fy) +
         px(ix, iy + 1) * (1 - fx) * fy +
         px(ix + 1, iy + 1) * fx * fy;
+      out[row + x] = isByte ? clamp(Math.round(v), 0, 255) : v;
     }
   }
   return { data: out, width: dw, height: dh };
