@@ -325,7 +325,7 @@ export class IndraOCR {
       }
     });
     const texts = nrec.map((r) => r.text);
-    const { order, layout } = await this.readingOrder(nb, texts, wh);
+    let { order, layout } = await this.readingOrder(nb, texts, wh);
     if (layout && layout.tab) {
       // The table heads learned one line per cell, but the detector can join
       // cells: split table lines into cells, then run the order model again.
