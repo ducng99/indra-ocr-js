@@ -26,7 +26,7 @@ page.lines;     // [{ box: [x0, y0, x1, y1], text, conf }]
 page.blocks;    // [{ label, bbox, text }] — Text, Section-Header, Table, ...
 ```
 
-`readGray` takes a path or Buffer in Node, a URL or Blob in the browser, and returns the grayscale `{ data, width, height }` the pipeline takes.
+`readGray(source, { maxSide })` takes a path or Buffer in Node, a URL, Blob or `ImageBitmap` (anything `createImageBitmap` accepts) in the browser, and returns the grayscale `{ data, width, height }` the pipeline takes. Transparent pixels are composited over white. `maxSide` optionally downscales (aspect kept, never upscaled) so the longer side is at most that many pixels — e.g. `{ maxSide: 2048 }` for large phone photos. In the browser it uses `OffscreenCanvas`, so it also works inside a Web Worker.
 
 `loadIndra(base, opts)` options:
 

@@ -148,21 +148,49 @@ export async function loadIndra(base, opts = {}) {
   return ocr;
 }
 
-// Decode an image URL/Blob to the grayscale {data, width, height} the pipeline
-// takes, with cv2's Rec.601 luma (see the luma note in src/imaging.mjs).
-export async function readGray(source) {
-  const blob = source instanceof Blob ? source : await (await fetch(source)).blob();
-  const bmp = await createImageBitmap(blob);
-  const c = document.createElement("canvas");
-  c.width = bmp.width;
-  c.height = bmp.height;
-  const ctx = c.getContext("2d", { willReadFrequently: true });
-  ctx.drawImage(bmp, 0, 0);
-  const { data, width, height } = ctx.getImageData(0, 0, bmp.width, bmp.height);
-  const out = new Uint8Array(width * height);
-  for (let i = 0, p = 0; i < out.length; i++, p += 4) {
-    out[i] = (data[p] * 9797 + data[p + 1] * 19234 + data[p + 2] * 3737) >> 15;
+// Decode an image to the grayscale {data, width, height} the pipeline takes,
+// with cv2's Rec.601 luma (see the luma note in src/imaging.mjs).
+//
+//   source        URL (string or URL), Blob/File, or anything createImageBitmap
+//                 takes (ImageBitmap, ImageData, <img>, canvas, VideoFrame, ...)
+//   opts.maxSide  downscale (aspect kept, never upscaled) so the longer side is
+//                 at most this many pixels; default: full resolution
+//
+// Transparent pixels are composited over white, so black text on a
+// transparent background reads as a page rather than a solid black image.
+// Uses OffscreenCanvas when available, so it also works in a Web Worker.
+export async function readGray(source, opts = {}) {
+  if (typeof source === "string" || source instanceof URL) {
+    const res = await fetch(source);
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${source}`);
+    source = await res.blob();
   }
-  bmp.close();
-  return { data: out, width, height };
+  // Only close bitmaps we created; a caller's ImageBitmap stays usable.
+  const own = !(typeof ImageBitmap !== "undefined" && source instanceof ImageBitmap);
+  const bmp = own ? await createImageBitmap(source) : source;
+  try {
+    const sw = bmp.width;
+    const sh = bmp.height;
+    const maxSide = opts.maxSide;
+    const s = maxSide > 0 ? Math.min(1, maxSide / Math.max(sw, sh)) : 1;
+    const width = Math.max(1, Math.round(sw * s));
+    const height = Math.max(1, Math.round(sh * s));
+    const c = typeof OffscreenCanvas !== "undefined"
+      ? new OffscreenCanvas(width, height)
+      : Object.assign(document.createElement("canvas"), { width, height });
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(bmp, 0, 0, width, height);
+    const { data } = ctx.getImageData(0, 0, width, height);
+    const out = new Uint8Array(width * height);
+    for (let i = 0, p = 0; i < out.length; i++, p += 4) {
+      out[i] = (data[p] * 9797 + data[p + 1] * 19234 + data[p + 2] * 3737) >> 15;
+    }
+    return { data: out, width, height };
+  } finally {
+    if (own) bmp.close();
+  }
 }

@@ -32,7 +32,10 @@ const server = createServer(async (req, res) => {
   try {
     const p = path.normalize(path.join(root, decodeURIComponent(new URL(req.url, "http://x").pathname)));
     if (!p.startsWith(root)) throw new Error();
-    const data = await readFile(p.endsWith("/") ? p + "index.html" : p);
+    let data = await readFile(p.endsWith("/") ? p + "index.html" : p);
+    // Pages/workers without the importmap: for ?worker, point the bare import at the CDN.
+    if (new URL(req.url, "http://x").searchParams.has("worker"))
+      data = data.toString().replace(/from "onnxruntime-web"/g, `from "${ORT_URL}"`);
     res.writeHead(200, {
       "content-type": MIME[path.extname(p).toLowerCase()] ?? "application/octet-stream",
       // the host page is about:blank (origin "null"), so module imports need CORS
@@ -173,6 +176,57 @@ try {
     }
   }
   await page.close();
+
+  // readGray: transparency over white, maxSide downscaling, and in a worker.
+  // Workers need a real origin (the OCR host page is about:blank), so this
+  // runs on a page served from the test server.
+  const rgPage = await browser.newPage();
+  await rgPage.goto(`http://127.0.0.1:${port}/package.json`);
+  const rg = await rgPage.evaluate(async (workerUrl) => {
+    const c = document.createElement("canvas");
+    c.width = 400;
+    c.height = 200;
+    const x = c.getContext("2d"); // transparent background, black text
+    x.fillStyle = "#000";
+    x.font = "40px serif";
+    x.fillText("Transparent", 20, 100);
+    const blob = await new Promise((r) => c.toBlob(r, "image/png"));
+    const { readGray } = await import(workerUrl);
+    const full = await readGray(blob);
+    const small = await readGray(blob, { maxSide: 100 });
+    const big = await readGray(blob, { maxSide: 4000 });
+    // The worker imports the library itself (no DOM, no importmap — the server
+    // rewrites the bare onnxruntime-web import for ?worker), then reads in place.
+    const src = `import(${JSON.stringify(workerUrl)}).then(({ readGray }) => {
+      onmessage = async (e) => {
+        try {
+          const g = await readGray(e.data, { maxSide: 100 });
+          postMessage({ w: g.width, h: g.height, corner: g.data[0] });
+        } catch (err) { postMessage({ err: String(err) }); }
+      };
+      postMessage({ ready: true });
+    }, (err) => postMessage({ err: "import: " + err }));`;
+    const w = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })), { type: "module" });
+    const inWorker = await new Promise((r) => {
+      w.onerror = (e) => r({ err: `worker error: ${e.message}` });
+      w.onmessage = (e) => {
+        if (e.data.ready) w.postMessage(blob);
+        else r(e.data);
+      };
+    });
+    w.terminate();
+    return {
+      full: [full.width, full.height, full.data[0], Math.min(...full.data)],
+      small: [small.width, small.height],
+      big: [big.width, big.height],
+      inWorker,
+    };
+  }, `http://127.0.0.1:${port}/src/browser.mjs?worker`);
+  const rgOk = rg.full.slice(0, 3).join() === "400,200,255" && rg.full[3] < 64 && rg.small.join() === "100,50" &&
+    rg.big.join() === "400,200" && rg.inWorker.w === 100 && rg.inWorker.h === 50 && rg.inWorker.corner === 255;
+  console.log(`readGray: ${rgOk ? "ok" : "FAILED"} ${JSON.stringify(rg)}`);
+  if (!rgOk) failed++;
+  await rgPage.close();
   if (!images.length)
     console.log("(no images passed — smoke-tested a synthetic page; pass paths to test real ones)");
 } finally {

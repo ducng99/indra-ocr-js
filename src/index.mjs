@@ -151,8 +151,20 @@ export async function loadIndra(base, opts = {}) {
 // Decode an image file path or Buffer to the grayscale {data, width, height}
 // the pipeline takes, with cv2's Rec.601 luma (see the luma note in
 // src/imaging.mjs).  sharp decodes; the pixel loop mirrors the browser entry.
-export async function readGray(source) {
-  const { data, info } = await sharp(source).raw().toBuffer({ resolveWithObject: true });
+// Like the browser entry, transparency is composited over white, and
+// opts.maxSide downscales (aspect kept, never upscaled) so the longer side is
+// at most that many pixels.
+export async function readGray(source, opts = {}) {
+  let img = sharp(source).flatten({ background: "#ffffff" });
+  if (opts.maxSide > 0) {
+    img = img.resize({
+      width: opts.maxSide,
+      height: opts.maxSide,
+      fit: "inside",
+      withoutEnlargement: true,
+    });
+  }
+  const { data, info } = await img.raw().toBuffer({ resolveWithObject: true });
   const { width, height, channels } = info;
   const out = new Uint8Array(width * height);
   for (let i = 0, p = 0; i < out.length; i++, p += channels) {
