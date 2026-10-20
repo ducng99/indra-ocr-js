@@ -1,6 +1,6 @@
 # indra-ocr-js
 
-The [indra-ocr](https://github.com/datalab-to/indra) ONNX models in JavaScript — line detection, recognition (Latin + CJK), reading order, orientation, math — in the browser on onnxruntime-web (wasm), in Node on onnxruntime-node. Models stream at runtime from the [Hugging Face Hub](https://huggingface.co/datalab-to/indra-ocr) (~18 MB, cached) or any URL / local folder.
+The [indra-ocr](https://github.com/datalab-to/indra) ONNX models in JavaScript — line detection, recognition (Latin + CJK), reading order, orientation, math — in the browser on onnxruntime-web (wasm), in Node on onnxruntime-node. Models stream at runtime from the [Hugging Face Hub](https://huggingface.co/datalab-to/indra-ocr) (cached) or any URL / local folder.
 
 ## Install
 

@@ -123,7 +123,7 @@ function drawArticle({ flip = false } = {}) {
     "line detection, recognition, reading order and orientation",
     "all run locally on WebAssembly, via ONNX Runtime.",
     "Your pixels stay put — only the model weights travel,",
-    "about 18 MB, once, and then the browser caches them.",
+    "once, and then the browser caches them.",
     "Filed under on-device intelligence",
   ].forEach((t, i) => x.fillText(t, 64, 180 + i * 54));
   if (!flip) return x.canvas;
